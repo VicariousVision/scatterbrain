@@ -1,4 +1,4 @@
-# Scatterbrain
+# Scatterbrain ⚖️🧠🤖
 
 Scatterbrain is a legal document intelligence platform that combines document parsing, knowledge graph extraction, and Graph-RAG-powered conversational querying.
 
