@@ -49,6 +49,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         uri=settings.neo4j_uri,
         username=settings.neo4j_username,
         password=settings.neo4j_password,
+        embedding_dimensions=settings.ollama_embedding_dimensions,
     )
     graph_query_service = GraphQueryService(
         uri=settings.neo4j_uri,
@@ -58,6 +59,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     ollama_client = OllamaClient(
         base_url=settings.ollama_base_url,
         model=settings.ollama_model,
+        embedding_model=settings.ollama_embedding_model,
     )
     document_service = DocumentService(
         graph_service=graph_service,

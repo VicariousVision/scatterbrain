@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     neo4j_password: str
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3"
+    ollama_embedding_model: str = "llama3"
+    ollama_embedding_dimensions: int = 4096
     backend_url: str = "http://localhost:8000"
 
     class Config:

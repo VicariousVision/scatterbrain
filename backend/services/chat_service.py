@@ -62,9 +62,17 @@ class ChatService:
             A tuple of (response_text, updated_history) where updated_history
             includes the user query and assistant response appended.
         """
-        # Step 1: Retrieve graph context
-        logger.info("Retrieving graph context for query: %s", user_query)
-        graph_context = await self.graph_query_service.get_relevant_context(user_query)
+        # Step 1: Generate query embedding and retrieve context
+        logger.info("Generating query embedding and retrieving context for query: %s", user_query)
+        try:
+            query_vector = await self.ollama_client.generate_embedding(user_query)
+        except Exception as exc:
+            logger.error("Failed to generate embedding for query: %s", exc)
+            query_vector = None
+
+        graph_context = await self.graph_query_service.get_relevant_context(
+            user_query, query_vector=query_vector
+        )
 
         # Step 2: Truncate history to last 10 messages (Requirement 6.5)
         truncated_history = history[-10:] if len(history) > 10 else history
@@ -87,7 +95,7 @@ class ChatService:
     def _build_prompt(
         self, user_query: str, graph_context: str, history: List[Dict[str, str]]
     ) -> str:
-        """Build the chat prompt with system instruction, graph context, history, and query.
+        """Build the chat prompt with system instruction, context, history, and query.
 
         Requirements: 5.4, 6.1
 
@@ -96,7 +104,7 @@ class ChatService:
         user_query:
             The user's natural language query.
         graph_context:
-            Formatted graph triples or "no data found" message.
+            Formatted context (graph triples and/or text chunks) or "no data found" message.
         history:
             Truncated message history (at most 10 messages).
 
@@ -108,7 +116,7 @@ class ChatService:
         # System grounding instruction (Requirement 6.1)
         system_instruction = (
             "SYSTEM: You are a legal document analysis assistant. "
-            "You MUST base your answer ONLY on the graph context provided below. "
+            "You MUST base your answer ONLY on the context (which contains both graph triples and text chunks) provided below. "
             "Do not fabricate information that is not present in the context. "
             "If the context does not contain relevant information, state that clearly."
         )

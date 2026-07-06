@@ -33,13 +33,17 @@ def _make_graph_service() -> MagicMock:
     gs = MagicMock()
     gs.store_entities = MagicMock()
     gs.store_relationships = MagicMock()
+    gs.store_chunks = MagicMock()
+    gs.link_chunks_to_entities = MagicMock()
     gs.delete_by_document_id = MagicMock()
     return gs
 
 
 def _make_ollama_client() -> MagicMock:
     """Return a mock OllamaClient."""
-    return MagicMock()
+    client = MagicMock()
+    client.generate_embedding = AsyncMock(return_value=[0.1] * 4096)
+    return client
 
 
 def _make_extraction_result(document_id: str) -> ExtractionResult:

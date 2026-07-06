@@ -26,6 +26,7 @@ from backend.services.document_parser import parse_document
 from backend.services.entity_extractor import extract_entities
 from backend.services.graph_service import GraphService
 from backend.services.ollama_client import OllamaClient
+from backend.services.text_chunker import chunk_text
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +166,20 @@ class DocumentService:
             logger.debug("Parsing document: document_id=%s filename=%s", document_id, filename)
             text = parse_document(filename, content)
 
+            # Step 1.5: Chunk text and generate embeddings.
+            logger.debug("Chunking document: document_id=%s", document_id)
+            chunks = chunk_text(text)
+            logger.debug("Generating embeddings for %d chunks: document_id=%s", len(chunks), document_id)
+            chunk_records = []
+            for i, chunk_text_content in enumerate(chunks):
+                embedding = await self._ollama_client.generate_embedding(chunk_text_content)
+                chunk_records.append({
+                    "id": f"{document_id}-chunk-{i}",
+                    "text": chunk_text_content,
+                    "document_id": document_id,
+                    "embedding": embedding
+                })
+
             # Step 2: Extract entities and relationships via LLM.
             logger.debug("Extracting entities: document_id=%s", document_id)
             extraction_result = await extract_entities(
@@ -182,23 +197,27 @@ class DocumentService:
             )
             await self._delete_stale_graph_data(filename, document_id)
 
-            # Step 4: Store entities and relationships in Neo4j.
+            # Step 4: Store entities, relationships, and chunks in Neo4j.
             logger.debug(
-                "Storing %d entities and %d relationships for document_id=%s",
+                "Storing %d entities, %d relationships, and %d chunks for document_id=%s",
                 len(extraction_result.entities),
                 len(extraction_result.relationships),
+                len(chunk_records),
                 document_id,
             )
             self._graph_service.store_entities(extraction_result.entities)
             self._graph_service.store_relationships(extraction_result.relationships)
+            self._graph_service.store_chunks(chunk_records)
+            self._graph_service.link_chunks_to_entities(document_id)
 
             # Step 5: Update status to completed.
             self._update_status(document_id, "completed")
             logger.info(
-                "Processing completed for document_id=%s (%d entities, %d relationships)",
+                "Processing completed for document_id=%s (%d entities, %d relationships, %d chunks)",
                 document_id,
                 len(extraction_result.entities),
                 len(extraction_result.relationships),
+                len(chunk_records),
             )
 
         except Exception as exc:  # noqa: BLE001

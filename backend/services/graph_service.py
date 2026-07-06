@@ -34,12 +34,16 @@ class GraphService:
         Neo4j username.
     password:
         Neo4j password.
+    embedding_dimensions:
+        Dimensionality of the embedding vectors for the vector index.
+        Defaults to ``4096``.
     """
 
-    def __init__(self, uri: str, username: str, password: str) -> None:
+    def __init__(self, uri: str, username: str, password: str, embedding_dimensions: int = 4096) -> None:
         self._uri = uri
         self._username = username
         self._password = password
+        self._embedding_dimensions = embedding_dimensions
         self._driver: Driver = GraphDatabase.driver(uri, auth=(username, password))
 
     # ------------------------------------------------------------------
@@ -67,24 +71,32 @@ class GraphService:
             ) from exc
 
     def create_constraints(self) -> None:
-        """Create the uniqueness constraint on (Entity.name, Entity.type).
+        """Create the uniqueness constraint on (Entity.name, Entity.type) and the vector index.
 
         Idempotent — uses ``IF NOT EXISTS`` so it is safe to call on every
         startup.
 
         Requirements: 4.5
         """
-        cypher = (
+        cypher_constraint = (
             "CREATE CONSTRAINT entity_name_type_unique IF NOT EXISTS "
             "FOR (e:Entity) REQUIRE (e.name, e.type) IS UNIQUE"
         )
+        dims = self._embedding_dimensions
+        cypher_vector_index = (
+            "CREATE VECTOR INDEX chunk_embeddings IF NOT EXISTS "
+            "FOR (c:Chunk) ON (c.embedding) "
+            f"OPTIONS {{ indexConfig: {{ `vector.dimensions`: {dims}, `vector.similarity_function`: 'cosine' }} }}"
+        )
         try:
             with self._driver.session() as session:
-                session.run(cypher)
-            logger.info("Neo4j uniqueness constraint applied.")
+                session.run(cypher_constraint)
+                logger.info("Neo4j uniqueness constraint applied.")
+                session.run(cypher_vector_index)
+                logger.info("Neo4j vector index 'chunk_embeddings' checked/created.")
         except Neo4jError as exc:
             raise GraphServiceError(
-                f"Failed to create Neo4j constraints: {exc}"
+                f"Failed to create Neo4j constraints or vector index: {exc}"
             ) from exc
 
     # ------------------------------------------------------------------
@@ -169,6 +181,59 @@ class GraphService:
                 f"Failed to store relationships: {exc}"
             ) from exc
 
+    def store_chunks(self, chunks: List[dict]) -> None:
+        """Persist a list of document chunks to Neo4j.
+
+        Parameters
+        ----------
+        chunks:
+            List of dicts, each with keys: ``"id"``, ``"text"``, ``"document_id"``, ``"embedding"``.
+        """
+        if not chunks:
+            return
+
+        cypher = (
+            "MERGE (c:Chunk {id: $id}) "
+            "SET c.text = $text, c.document_id = $document_id, c.embedding = $embedding"
+        )
+        try:
+            with self._driver.session() as session:
+                for chunk in chunks:
+                    session.run(
+                        cypher,
+                        id=chunk["id"],
+                        text=chunk["text"],
+                        document_id=chunk["document_id"],
+                        embedding=chunk["embedding"],
+                    )
+            logger.debug("Stored %d chunks.", len(chunks))
+        except Neo4jError as exc:
+            raise GraphServiceError(
+                f"Failed to store chunks: {exc}"
+            ) from exc
+
+    def link_chunks_to_entities(self, document_id: str) -> None:
+        """Link Chunk nodes to Entity nodes based on text overlap within a document.
+
+        Matches (c:Chunk) and (e:Entity) for the given document_id, and creates a
+        [:MENTIONS] relationship from the chunk to the entity if the chunk's text
+        contains the entity's name (case-insensitive).
+        """
+        cypher = (
+            "MATCH (c:Chunk {document_id: $document_id}) "
+            "MATCH (e:Entity {document_id: $document_id}) "
+            "WHERE toLower(c.text) CONTAINS toLower(e.name) "
+            "MERGE (c)-[:MENTIONS]->(e)"
+        )
+        try:
+            with self._driver.session() as session:
+                session.run(cypher, document_id=document_id)
+            logger.info("Linked chunks to entities for document_id=%s", document_id)
+        except Neo4jError as exc:
+            raise GraphServiceError(
+                f"Failed to link chunks to entities: {exc}"
+            ) from exc
+
     # ------------------------------------------------------------------
     # Delete operations
     # ------------------------------------------------------------------
@@ -186,17 +251,25 @@ class GraphService:
         document_id:
             The UUID of the document whose graph data should be removed.
         """
-        cypher = (
+        cypher_chunks = (
+            "MATCH (c:Chunk {document_id: $document_id}) "
+            "DETACH DELETE c"
+        )
+        cypher_entities = (
             "MATCH (e:Entity {document_id: $document_id}) "
             "DETACH DELETE e"
         )
         try:
             with self._driver.session() as session:
-                result = session.run(cypher, document_id=document_id)
-                summary = result.consume()
+                result_c = session.run(cypher_chunks, document_id=document_id)
+                summary_c = result_c.consume()
+                result_e = session.run(cypher_entities, document_id=document_id)
+                summary_e = result_e.consume()
                 logger.info(
-                    "Deleted %d nodes for document_id=%s.",
-                    summary.counters.nodes_deleted,
+                    "Deleted %d nodes (entities: %d, chunks: %d) for document_id=%s.",
+                    summary_c.counters.nodes_deleted + summary_e.counters.nodes_deleted,
+                    summary_e.counters.nodes_deleted,
+                    summary_c.counters.nodes_deleted,
                     document_id,
                 )
         except Neo4jError as exc:

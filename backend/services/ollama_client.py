@@ -21,9 +21,43 @@ class OllamaClient:
         model:    Name of the model to use for generation (e.g. ``llama3``).
     """
 
-    def __init__(self, base_url: str, model: str) -> None:
+    def __init__(self, base_url: str, model: str, embedding_model: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.embedding_model = embedding_model or model
+
+    async def generate_embedding(self, text: str) -> list[float]:
+        """Send a string to the Ollama ``/api/embeddings`` endpoint and return the vector.
+
+        Args:
+            text: The text to embed.
+
+        Returns:
+            A list of floats representing the embedding vector.
+
+        Raises:
+            OllamaClientError: If the request fails or the response cannot be parsed.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/api/embeddings",
+                    json={"model": self.embedding_model, "prompt": text},
+                )
+                response.raise_for_status()
+                return response.json()["embedding"]
+        except httpx.HTTPStatusError as exc:
+            raise OllamaClientError(
+                f"Ollama API returned an error status {exc.response.status_code}: {exc.response.text}"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise OllamaClientError(
+                f"Failed to connect to Ollama at {self.base_url}: {exc}"
+            ) from exc
+        except (KeyError, ValueError) as exc:
+            raise OllamaClientError(
+                f"Unexpected response format from Ollama: {exc}"
+            ) from exc
 
     async def generate(self, prompt: str) -> str:
         """Send a prompt to the Ollama ``/api/generate`` endpoint and return the response text.
