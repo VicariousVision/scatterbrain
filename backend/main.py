@@ -2,10 +2,8 @@
 
 Startup sequence (lifespan context manager):
   1. Instantiate all service singletons.
-  2. Verify Neo4j connectivity and apply uniqueness constraints.
-     Logs an error and continues in degraded state if Neo4j is unreachable.
+  2. Verify Neo4j connectivity and apply constraints.
   3. Verify Ollama connectivity.
-     Logs an error and continues in degraded state if Ollama is unreachable.
   4. Register service instances with each router.
 
 Requirements: 8.5
@@ -27,6 +25,7 @@ from backend.services.chat_service import ChatService
 from backend.services.document_service import DocumentService
 from backend.services.graph_query_service import GraphQueryService
 from backend.services.graph_service import GraphService, GraphServiceError
+from backend.services.ollama_adapters import OllamaEmbedderAdapter, OllamaLLMAdapter
 from backend.services.ollama_client import OllamaClient
 
 logging.basicConfig(
@@ -43,7 +42,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Requirements: 8.5
     """
     # ------------------------------------------------------------------
-    # Instantiate service singletons
+    # Core clients
+    # ------------------------------------------------------------------
+    ollama_client = OllamaClient(
+        base_url=settings.ollama_base_url,
+        model=settings.ollama_model,
+        embedding_model=settings.ollama_embedding_model,
+        num_gpu=settings.ollama_num_gpu,
+    )
+
+    # neo4j-graphrag adapters (LLM + Embedder)
+    llm_adapter = OllamaLLMAdapter(
+        ollama_client=ollama_client,
+        model_name=settings.ollama_model,
+    )
+    embedder_adapter = OllamaEmbedderAdapter(ollama_client=ollama_client)
+
+    # ------------------------------------------------------------------
+    # Graph services
     # ------------------------------------------------------------------
     graph_service = GraphService(
         uri=settings.neo4j_uri,
@@ -55,37 +71,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         uri=settings.neo4j_uri,
         username=settings.neo4j_username,
         password=settings.neo4j_password,
+        embedder=embedder_adapter,
     )
-    ollama_client = OllamaClient(
-        base_url=settings.ollama_base_url,
-        model=settings.ollama_model,
-        embedding_model=settings.ollama_embedding_model,
-    )
+
+    # ------------------------------------------------------------------
+    # Application services
+    # ------------------------------------------------------------------
     document_service = DocumentService(
         graph_service=graph_service,
         ollama_client=ollama_client,
     )
     chat_service = ChatService(
         graph_query_service=graph_query_service,
-        ollama_client=ollama_client,
+        llm_adapter=llm_adapter,
     )
 
     # ------------------------------------------------------------------
-    # Verify Neo4j connectivity and apply constraints (Requirement 8.5)
+    # Verify Neo4j connectivity (Requirement 8.5)
     # ------------------------------------------------------------------
     try:
         graph_service.verify_connection()
         graph_service.create_constraints()
-        logger.info("Neo4j connected and uniqueness constraints applied.")
+        logger.info("Neo4j connected and constraints applied.")
     except GraphServiceError as exc:
-        logger.error(
-            "Neo4j connection failed: %s. Starting in degraded state.", exc
-        )
+        logger.error("Neo4j connection failed: %s. Starting in degraded state.", exc)
     except Exception as exc:  # noqa: BLE001
-        logger.error(
-            "Unexpected error during Neo4j startup: %s. Starting in degraded state.",
-            exc,
-        )
+        logger.error("Unexpected Neo4j startup error: %s. Starting in degraded state.", exc)
 
     # ------------------------------------------------------------------
     # Verify Ollama connectivity (Requirement 8.5)
@@ -96,17 +107,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.info("Ollama connected at %s.", settings.ollama_base_url)
         else:
             logger.error(
-                "Ollama health check returned non-200 at %s. "
-                "Starting in degraded state.",
+                "Ollama health check returned non-200 at %s. Starting in degraded state.",
                 settings.ollama_base_url,
             )
     except Exception as exc:  # noqa: BLE001
-        logger.error(
-            "Ollama connection failed: %s. Starting in degraded state.", exc
-        )
+        logger.error("Ollama connection failed: %s. Starting in degraded state.", exc)
 
     # ------------------------------------------------------------------
-    # Register service instances with routers
+    # Register services with routers
     # ------------------------------------------------------------------
     documents_router.set_services(
         document_service=document_service,
@@ -118,16 +126,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     # ------------------------------------------------------------------
-    # Shutdown: close Neo4j driver connections
+    # Shutdown
     # ------------------------------------------------------------------
     graph_service.close()
     graph_query_service.close()
     logger.info("Scatterbrain backend shut down.")
 
-
-# ---------------------------------------------------------------------------
-# Application factory
-# ---------------------------------------------------------------------------
 
 app = FastAPI(
     title="Scatterbrain",
@@ -135,11 +139,10 @@ app = FastAPI(
         "Legal document intelligence API. "
         "Upload documents, extract a knowledge graph, and query it via chat."
     ),
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
-# Register routers
 app.include_router(health_router.router)
 app.include_router(documents_router.router)
 app.include_router(chat_router.router)

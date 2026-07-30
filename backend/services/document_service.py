@@ -5,10 +5,23 @@ in-memory store keyed by ``document_id``.
 
 Processing pipeline (run as a background asyncio task):
   1. Parse document text (``document_parser``)
-  2. Extract entities and relationships (``entity_extractor``)
-  3. Delete existing graph data for the same filename (re-upload case)
-  4. Store entities and relationships in Neo4j (``graph_service``)
-  5. Update document status to ``completed`` or ``failed``
+  2. Build knowledge graph via neo4j-graphrag ``SimpleKGPipeline``
+     - Splits text into chunks (FixedSizeSplitter)
+     - Embeds each chunk (OllamaEmbedderAdapter → nomic-embed-text)
+     - Extracts entities + relationships (OllamaLLMAdapter → mistral)
+     - Writes Document, Chunk, and Entity nodes + edges to Neo4j
+     - Runs entity resolution (SinglePropertyExactMatchResolver)
+  3. Update document status to ``completed`` or ``failed``
+
+Memory notes (GTX 960 / 2 GB VRAM):
+  - Ollama is configured with ``num_gpu=0`` (CPU-only). Generation is slower
+    (~1–4 tok/s on a modern CPU) but stable — no VRAM is consumed by the LLM.
+  - Chunk size is kept small (300 tokens, 25 overlap) so each LLM call receives
+    a short prompt, reducing peak RAM usage and avoiding context-length errors.
+  - Documents are processed one at a time (sequential asyncio tasks). FastAPI
+    may accept concurrent uploads, but each ``_process_document`` task awaits
+    the full KG pipeline before the next one starts, preventing parallel Ollama
+    calls from stacking up in memory.
 
 Requirements: 1.4, 1.5, 1.6, 1.7, 4.4, 7.1, 7.3
 """
@@ -21,32 +34,73 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from neo4j import GraphDatabase
+from neo4j_graphrag.experimental.components.text_splitters.fixed_size_splitter import (
+    FixedSizeSplitter,
+)
+from neo4j_graphrag.experimental.pipeline.kg_builder import SimpleKGPipeline
+
+from backend.config import settings
 from backend.models.document import DocumentRecord
 from backend.services.document_parser import parse_document
-from backend.services.entity_extractor import extract_entities
 from backend.services.graph_service import GraphService
+from backend.services.ollama_adapters import OllamaEmbedderAdapter, OllamaLLMAdapter
 from backend.services.ollama_client import OllamaClient
-from backend.services.text_chunker import chunk_text
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Legal-domain schema for the SimpleKGPipeline
+# ---------------------------------------------------------------------------
+
+_NODE_TYPES = [
+    "Person",
+    {"label": "Organization", "description": "A company, firm, or legal entity"},
+    {"label": "Contract", "description": "A legal agreement or document"},
+    {"label": "Clause", "description": "A specific section or provision within a contract"},
+    {"label": "Date", "description": "A date or time period referenced in the document"},
+    {"label": "Jurisdiction", "description": "A legal jurisdiction, country, or governing law"},
+    {"label": "Obligation", "description": "A duty, requirement, or liability described in the document"},
+]
+
+_RELATIONSHIP_TYPES = [
+    "PARTY_TO",
+    "GOVERNS",
+    "INCLUDES_CLAUSE",
+    "SUBJECT_TO",
+    "OBLIGATED_BY",
+    "EFFECTIVE_ON",
+    "SIGNED_BY",
+    "REPRESENTS",
+]
+
+_PATTERNS = [
+    ("Person", "PARTY_TO", "Contract"),
+    ("Organization", "PARTY_TO", "Contract"),
+    ("Contract", "INCLUDES_CLAUSE", "Clause"),
+    ("Contract", "SUBJECT_TO", "Jurisdiction"),
+    ("Person", "OBLIGATED_BY", "Obligation"),
+    ("Organization", "OBLIGATED_BY", "Obligation"),
+    ("Contract", "EFFECTIVE_ON", "Date"),
+    ("Person", "SIGNED_BY", "Contract"),
+    ("Person", "REPRESENTS", "Organization"),
+]
 
 
 class DocumentService:
     """Orchestrates document upload and the asynchronous processing pipeline.
 
     Maintains an in-memory dictionary of :class:`~backend.models.document.DocumentRecord`
-    objects keyed by ``document_id``.  This store resets on server restart; a
-    SQLite-backed store can be substituted without changing the public interface.
+    objects keyed by ``document_id``.  This store resets on server restart.
 
     Parameters
     ----------
     graph_service:
         A :class:`~backend.services.graph_service.GraphService` instance used
-        to delete stale graph data and persist newly extracted entities and
-        relationships.
+        to delete stale graph data and provide graph summaries.
     ollama_client:
         An :class:`~backend.services.ollama_client.OllamaClient` instance used
-        by the entity extractor to call the LLM.
+        for LLM generation and embeddings.
     """
 
     def __init__(
@@ -56,8 +110,18 @@ class DocumentService:
     ) -> None:
         self._graph_service = graph_service
         self._ollama_client = ollama_client
-        # In-memory store: document_id → DocumentRecord
         self._store: Dict[str, DocumentRecord] = {}
+        # Limit to one active KG pipeline at a time. Parallel pipelines would
+        # issue concurrent Ollama requests, multiplying RAM/VRAM usage and
+        # causing OOM errors on memory-constrained hardware (e.g. GTX 960 2 GB).
+        self._processing_semaphore = asyncio.Semaphore(1)
+
+        # Build neo4j-graphrag adapters once.
+        self._llm_adapter = OllamaLLMAdapter(
+            ollama_client=ollama_client,
+            model_name=settings.ollama_model,
+        )
+        self._embedder_adapter = OllamaEmbedderAdapter(ollama_client=ollama_client)
 
     # ------------------------------------------------------------------
     # Public API
@@ -66,23 +130,7 @@ class DocumentService:
     async def upload(self, filename: str, content: bytes) -> DocumentRecord:
         """Accept an uploaded file, create a tracking record, and start processing.
 
-        Generates a UUID4 ``document_id``, stores a :class:`DocumentRecord`
-        with status ``processing``, dispatches the background processing task,
-        and returns the record immediately (202 Accepted pattern).
-
         Requirements: 1.4
-
-        Parameters
-        ----------
-        filename:
-            Original filename including extension (e.g. ``contract.pdf``).
-        content:
-            Raw file bytes.
-
-        Returns
-        -------
-        DocumentRecord
-            The newly created record with status ``processing``.
         """
         document_id = str(uuid.uuid4())
         record = DocumentRecord(
@@ -92,27 +140,18 @@ class DocumentService:
             status="processing",
         )
         self._store[document_id] = record
-        logger.info(
-            "Document uploaded: document_id=%s filename=%s", document_id, filename
-        )
+        logger.info("Document uploaded: document_id=%s filename=%s", document_id, filename)
 
-        # Dispatch background processing without blocking the caller.
         asyncio.create_task(
             self._process_document(document_id, filename, content),
             name=f"process-{document_id}",
         )
-
         return record
 
     def list_documents(self) -> List[DocumentRecord]:
         """Return all document records in the in-memory store.
 
         Requirements: 7.1, 7.3
-
-        Returns
-        -------
-        List[DocumentRecord]
-            All tracked documents, in insertion order (Python 3.7+ dict ordering).
         """
         return list(self._store.values())
 
@@ -120,16 +159,6 @@ class DocumentService:
         """Return the record for a single document, or ``None`` if not found.
 
         Requirements: 7.3
-
-        Parameters
-        ----------
-        document_id:
-            The UUID of the document to retrieve.
-
-        Returns
-        -------
-        DocumentRecord or None
-            The matching record, or ``None`` if ``document_id`` is unknown.
         """
         return self._store.get(document_id)
 
@@ -144,21 +173,11 @@ class DocumentService:
 
         Steps:
           1. Parse document text.
-          2. Extract entities and relationships via LLM.
-          3. Delete existing graph data for the same filename (re-upload case).
-          4. Store entities and relationships in Neo4j.
-          5. Update status to ``completed`` or ``failed``.
+          2. Delete stale graph data for the same filename (re-upload case).
+          3. Run SimpleKGPipeline (chunk → embed → extract → write → resolve).
+          4. Update status to ``completed`` or ``failed``.
 
         Requirements: 1.5, 1.6, 1.7, 4.4
-
-        Parameters
-        ----------
-        document_id:
-            UUID of the document being processed.
-        filename:
-            Original filename (used to find and delete stale graph data).
-        content:
-            Raw file bytes to parse.
         """
         logger.info("Starting processing pipeline for document_id=%s", document_id)
         try:
@@ -166,59 +185,21 @@ class DocumentService:
             logger.debug("Parsing document: document_id=%s filename=%s", document_id, filename)
             text = parse_document(filename, content)
 
-            # Step 1.5: Chunk text and generate embeddings.
-            logger.debug("Chunking document: document_id=%s", document_id)
-            chunks = chunk_text(text)
-            logger.debug("Generating embeddings for %d chunks: document_id=%s", len(chunks), document_id)
-            chunk_records = []
-            for i, chunk_text_content in enumerate(chunks):
-                embedding = await self._ollama_client.generate_embedding(chunk_text_content)
-                chunk_records.append({
-                    "id": f"{document_id}-chunk-{i}",
-                    "text": chunk_text_content,
-                    "document_id": document_id,
-                    "embedding": embedding
-                })
-
-            # Step 2: Extract entities and relationships via LLM.
-            logger.debug("Extracting entities: document_id=%s", document_id)
-            extraction_result = await extract_entities(
-                text=text,
-                document_id=document_id,
-                client=self._ollama_client,
-            )
-
-            # Step 3: Delete existing graph data for the same filename.
-            # Find any previous document_id(s) that share the same filename.
-            logger.debug(
-                "Deleting stale graph data for filename=%s (new document_id=%s)",
-                filename,
-                document_id,
-            )
+            # Step 2: Delete stale graph data for the same filename.
             await self._delete_stale_graph_data(filename, document_id)
 
-            # Step 4: Store entities, relationships, and chunks in Neo4j.
-            logger.debug(
-                "Storing %d entities, %d relationships, and %d chunks for document_id=%s",
-                len(extraction_result.entities),
-                len(extraction_result.relationships),
-                len(chunk_records),
-                document_id,
-            )
-            self._graph_service.store_entities(extraction_result.entities)
-            self._graph_service.store_relationships(extraction_result.relationships)
-            self._graph_service.store_chunks(chunk_records)
-            self._graph_service.link_chunks_to_entities(document_id)
+            # Step 3: Build knowledge graph via SimpleKGPipeline.
+            # Semaphore ensures only one pipeline runs at a time — prevents
+            # concurrent Ollama calls from stacking up in memory.
+            async with self._processing_semaphore:
+                logger.debug(
+                    "Acquired processing semaphore for document_id=%s", document_id
+                )
+                await self._run_kg_pipeline(text, document_id, filename)
 
-            # Step 5: Update status to completed.
+            # Step 4: Mark as completed.
             self._update_status(document_id, "completed")
-            logger.info(
-                "Processing completed for document_id=%s (%d entities, %d relationships, %d chunks)",
-                document_id,
-                len(extraction_result.entities),
-                len(extraction_result.relationships),
-                len(chunk_records),
-            )
+            logger.info("Processing completed for document_id=%s", document_id)
 
         except Exception as exc:  # noqa: BLE001
             error_message = str(exc)
@@ -230,24 +211,60 @@ class DocumentService:
             )
             self._update_status(document_id, "failed", error=error_message)
 
+    async def _run_kg_pipeline(
+        self, text: str, document_id: str, filename: str
+    ) -> None:
+        """Build the knowledge graph for one document using SimpleKGPipeline.
+
+        SimpleKGPipeline requires a *sync* Neo4j driver internally (it manages
+        its own session lifecycle), so we open a dedicated driver here rather
+        than reusing the one held by GraphService (which is also sync but
+        already managed by that service).
+        """
+        logger.debug("Running SimpleKGPipeline for document_id=%s", document_id)
+
+        # SimpleKGPipeline works with a synchronous neo4j driver.
+        driver = GraphDatabase.driver(
+            settings.neo4j_uri,
+            auth=(settings.neo4j_username, settings.neo4j_password),
+        )
+        try:
+            # Small chunks keep each LLM call's prompt short, reducing peak RAM.
+            # 300-token chunks with 25-token overlap work well for CPU-only Mistral.
+            text_splitter = FixedSizeSplitter(chunk_size=300, chunk_overlap=25)
+
+            kg_pipeline = SimpleKGPipeline(
+                llm=self._llm_adapter,
+                driver=driver,
+                embedder=self._embedder_adapter,
+                text_splitter=text_splitter,
+                from_pdf=False,
+                entities=_NODE_TYPES,
+                relations=_RELATIONSHIP_TYPES,
+                potential_schema=_PATTERNS,
+                perform_entity_resolution=True,
+                on_error="IGNORE",
+            )
+
+            result = await kg_pipeline.run_async(text=text)
+            logger.info(
+                "SimpleKGPipeline finished for document_id=%s: %s",
+                document_id,
+                result,
+            )
+        finally:
+            driver.close()
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
     async def _delete_stale_graph_data(
         self, filename: str, current_document_id: str
     ) -> None:
         """Delete graph data for any previous upload of the same filename.
 
-        Iterates the in-memory store to find records with the same filename
-        but a different ``document_id``, then calls
-        :meth:`~backend.services.graph_service.GraphService.delete_by_document_id`
-        for each one.
-
         Requirements: 4.4
-
-        Parameters
-        ----------
-        filename:
-            The filename to match against existing records.
-        current_document_id:
-            The ``document_id`` of the current upload (excluded from deletion).
         """
         stale_ids = [
             record.document_id
@@ -269,25 +286,12 @@ class DocumentService:
         status: str,
         error: Optional[str] = None,
     ) -> None:
-        """Update the status (and optional error) of a document record in-place.
-
-        Parameters
-        ----------
-        document_id:
-            The UUID of the document to update.
-        status:
-            New status value: ``"completed"`` or ``"failed"``.
-        error:
-            Optional error description (set when status is ``"failed"``).
-        """
         record = self._store.get(document_id)
         if record is None:
             logger.warning(
                 "Attempted to update status for unknown document_id=%s", document_id
             )
             return
-
-        # Pydantic v2 models are immutable by default; use model_copy to update.
         self._store[document_id] = record.model_copy(
             update={"status": status, "error": error}
         )

@@ -17,14 +17,25 @@ class OllamaClient:
     """Thin async HTTP wrapper around the Ollama REST API.
 
     Args:
-        base_url: Base URL of the Ollama server (e.g. ``http://localhost:11434``).
-        model:    Name of the model to use for generation (e.g. ``llama3``).
+        base_url:  Base URL of the Ollama server (e.g. ``http://localhost:11434``).
+        model:     Name of the model to use for generation (e.g. ``mistral``).
+        num_gpu:   Number of GPU layers to offload. Set to ``0`` to run fully on
+                   CPU (required on low-VRAM cards such as GTX 960 2 GB).
+                   Defaults to ``0`` (CPU-only, slower but stable).
     """
 
-    def __init__(self, base_url: str, model: str, embedding_model: str | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        embedding_model: str | None = None,
+        num_gpu: int = 0,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.embedding_model = embedding_model or model
+        # num_gpu=0 → all computation stays on CPU; no VRAM consumed by the LLM.
+        self.num_gpu = num_gpu
 
     async def generate_embedding(self, text: str) -> list[float]:
         """Send a string to the Ollama ``/api/embeddings`` endpoint and return the vector.
@@ -75,7 +86,15 @@ class OllamaClient:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(
                     f"{self.base_url}/api/generate",
-                    json={"model": self.model, "prompt": prompt, "stream": False},
+                    json={
+                        "model": self.model,
+                        "prompt": prompt,
+                        "stream": False,
+                        # CPU-only mode: num_gpu=0 prevents any layers from being
+                        # offloaded to the GPU, avoiding VRAM OOM errors on cards
+                        # with limited memory (e.g. GTX 960 2 GB).
+                        "options": {"num_gpu": self.num_gpu},
+                    },
                 )
                 response.raise_for_status()
                 return response.json()["response"]
