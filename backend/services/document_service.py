@@ -38,6 +38,7 @@ from neo4j import GraphDatabase
 from neo4j_graphrag.experimental.components.text_splitters.fixed_size_splitter import (
     FixedSizeSplitter,
 )
+from neo4j_graphrag.experimental.components.types import DocumentInfo
 from neo4j_graphrag.experimental.pipeline.kg_builder import SimpleKGPipeline
 
 from backend.config import settings
@@ -246,7 +247,43 @@ class DocumentService:
                 on_error="IGNORE",
             )
 
-            result = await kg_pipeline.run_async(text=text)
+            # SimpleKGPipeline.run_async(text=...) never injects document_info
+            # into the extractor when from_pdf=False, so LexicalGraphBuilder
+            # receives None and skips creating the Document node + FROM_DOCUMENT
+            # edges.
+            #
+            # We need to inject DocumentInfo ourselves.  We cannot call
+            # runner.run(expanded_params) because PipelineRunner.run() always
+            # re-calls config.get_run_params(user_input) on whatever we pass,
+            # which expects a top-level {"text": ...} key — not the already-
+            # expanded component dict — and raises PipelineDefinitionError.
+            #
+            # Instead we:
+            #   1. Let the config expand {"text": text} → component-level params
+            #   2. Merge with the pipeline's static base run_params
+            #   3. Inject document_info into the extractor params
+            #   4. Call runner.pipeline.run(data=...) directly to skip the
+            #      second get_run_params() call in runner.run().
+            document_info = DocumentInfo(
+                path=filename,
+                uid=document_id,
+                metadata={"document_id": document_id, "filename": filename},
+            )
+            # Step 1+2: build the merged component-level params dict.
+            user_derived = kg_pipeline.runner.config.get_run_params(
+                {"text": text}
+            )
+            merged_params: dict = {**kg_pipeline.runner.run_params}
+            for component, params in user_derived.items():
+                if component in merged_params:
+                    merged_params[component] = {**merged_params[component], **params}
+                else:
+                    merged_params[component] = params
+            # Step 3: inject document_info so the lexical graph creates a
+            # Document node and links every Chunk via FROM_DOCUMENT.
+            merged_params.setdefault("extractor", {})["document_info"] = document_info
+            # Step 4: run the inner pipeline directly.
+            result = await kg_pipeline.runner.pipeline.run(data=merged_params)
             logger.info(
                 "SimpleKGPipeline finished for document_id=%s: %s",
                 document_id,

@@ -67,6 +67,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         password=settings.neo4j_password,
         embedding_dimensions=settings.ollama_embedding_dimensions,
     )
+
+    # ------------------------------------------------------------------
+    # Verify Neo4j connectivity and create vector index BEFORE
+    # GraphQueryService tries to validate that the index exists.
+    # (Requirement 8.5)
+    # ------------------------------------------------------------------
+    try:
+        graph_service.verify_connection()
+        graph_service.create_constraints()
+        logger.info("Neo4j connected and constraints applied.")
+    except GraphServiceError as exc:
+        logger.error("Neo4j connection failed: %s. Starting in degraded state.", exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Unexpected Neo4j startup error: %s. Starting in degraded state.", exc)
+
+    # VectorCypherRetriever validates the index exists at init time, so
+    # GraphQueryService must be created AFTER create_constraints().
     graph_query_service = GraphQueryService(
         uri=settings.neo4j_uri,
         username=settings.neo4j_username,
@@ -85,18 +102,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         graph_query_service=graph_query_service,
         llm_adapter=llm_adapter,
     )
-
-    # ------------------------------------------------------------------
-    # Verify Neo4j connectivity (Requirement 8.5)
-    # ------------------------------------------------------------------
-    try:
-        graph_service.verify_connection()
-        graph_service.create_constraints()
-        logger.info("Neo4j connected and constraints applied.")
-    except GraphServiceError as exc:
-        logger.error("Neo4j connection failed: %s. Starting in degraded state.", exc)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Unexpected Neo4j startup error: %s. Starting in degraded state.", exc)
 
     # ------------------------------------------------------------------
     # Verify Ollama connectivity (Requirement 8.5)
