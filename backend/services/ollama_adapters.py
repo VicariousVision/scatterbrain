@@ -1,6 +1,10 @@
-"""Adapters that bridge the existing OllamaClient to the neo4j-graphrag
-LLMInterface and Embedder interfaces so the library can use the local Ollama
-server without any cloud credentials.
+"""Adapters that bridge OllamaClient to neo4j-graphrag interfaces.
+
+OllamaLLMAdapter is used by ChatService for final answer generation.
+
+OllamaEmbedderAdapter is retained as a no-op stub so any external code that
+imports it does not break.  It is NOT used in the ingestion or query pipeline —
+this pipeline uses Cypher traversal, not vector embeddings.
 """
 
 from __future__ import annotations
@@ -10,7 +14,6 @@ import concurrent.futures
 import logging
 from typing import Any, List, Optional, Union
 
-from neo4j_graphrag.embeddings.base import Embedder
 from neo4j_graphrag.llm import LLMInterface, LLMResponse
 from neo4j_graphrag.message_history import MessageHistory
 from neo4j_graphrag.types import LLMMessage
@@ -19,9 +22,8 @@ from backend.services.ollama_client import OllamaClient
 
 logger = logging.getLogger(__name__)
 
-# Limit concurrent Ollama LLM requests to 1 to prevent OOM crashes.
-# The neo4j-graphrag pipeline calls ainvoke in parallel for every chunk;
-# without this guard the model is loaded/run multiple times simultaneously.
+# Serialise all LLM calls — the OllamaClient semaphore already does this for
+# async callers, but the sync invoke() path uses a thread so we also guard here.
 _LLM_SEMAPHORE = asyncio.Semaphore(1)
 
 
@@ -33,8 +35,6 @@ def _run_async(coro: Any) -> Any:
         loop = None
 
     if loop and loop.is_running():
-        # We're already inside an async event loop (e.g. FastAPI / asyncio).
-        # Spin up a thread with its own loop so we don't block the main one.
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             future = pool.submit(asyncio.run, coro)
             return future.result()
@@ -43,15 +43,14 @@ def _run_async(coro: Any) -> Any:
 
 
 class OllamaLLMAdapter(LLMInterface):
-    """Wraps :class:`~backend.services.ollama_client.OllamaClient` so it can
-    be used anywhere ``neo4j_graphrag`` expects an ``LLMInterface``.
+    """Wraps OllamaClient so it can be used anywhere LLMInterface is expected.
 
     Parameters
     ----------
     ollama_client:
-        A live :class:`~backend.services.ollama_client.OllamaClient` instance.
+        A live OllamaClient instance.
     model_name:
-        Model name forwarded to ``LLMInterface``; informational only.
+        Model name forwarded to LLMInterface; informational only.
     """
 
     def __init__(self, ollama_client: OllamaClient, model_name: str) -> None:
@@ -74,31 +73,26 @@ class OllamaLLMAdapter(LLMInterface):
         message_history: Optional[Union[List[LLMMessage], MessageHistory]] = None,
         system_instruction: Optional[str] = None,
     ) -> LLMResponse:
-        """Async text generation via Ollama, serialised via semaphore.
-
-        The neo4j-graphrag pipeline fires ainvoke concurrently for every chunk.
-        Running multiple llama3 inferences in parallel exhausts RAM/VRAM and
-        causes the runner to crash with exit code 2.  The semaphore ensures
-        only one Ollama request is in-flight at a time.
-        """
+        """Async text generation via Ollama."""
         async with _LLM_SEMAPHORE:
             text = await self._client.generate(input)
         return LLMResponse(content=text)
 
 
-class OllamaEmbedderAdapter(Embedder):
-    """Wraps :class:`~backend.services.ollama_client.OllamaClient` so it can
-    be used anywhere ``neo4j_graphrag`` expects an ``Embedder``.
+class OllamaEmbedderAdapter:
+    """No-op stub retained for import compatibility.
 
-    Parameters
-    ----------
-    ollama_client:
-        A live :class:`~backend.services.ollama_client.OllamaClient` instance.
+    This pipeline does not use embeddings.  If you see this class being
+    instantiated somewhere in active code, that code path should be removed.
     """
 
     def __init__(self, ollama_client: OllamaClient) -> None:
         self._client = ollama_client
+        logger.warning(
+            "OllamaEmbedderAdapter instantiated — this pipeline does not use "
+            "embeddings.  Check whether the caller should be updated."
+        )
 
     def embed_query(self, text: str) -> list[float]:
-        """Synchronous embedding via Ollama."""
-        return _run_async(self._client.generate_embedding(text))
+        logger.warning("OllamaEmbedderAdapter.embed_query called — returning empty vector.")
+        return []

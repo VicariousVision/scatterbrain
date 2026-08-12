@@ -1,10 +1,13 @@
-"""Neo4j graph service for schema setup, graph summaries, and deletion.
+"""Neo4j graph service: connection verification, summary queries, and deletion.
 
-The entity/relationship write operations are now handled by neo4j-graphrag's
-``SimpleKGPipeline`` (via ``Neo4jWriter``).  This service retains:
-  - connection verification and vector-index creation
-  - ``delete_by_document_id`` for stale-data cleanup on re-upload
-  - ``get_graph_summary`` for the API summary endpoint
+The entity/relationship write operations are handled by Neo4jLoader in
+extraction_service.py.  This service provides:
+  - Connection verification at startup
+  - delete_by_document_id for re-upload cleanup (kept for API compatibility)
+  - get_graph_summary for the /documents/{id}/graph-summary endpoint
+  - count_provisions_for_manual used by DocumentService as a sanity check
+
+No vector index creation here — this pipeline does not use embeddings.
 
 Requirements: 4.4, 4.5
 """
@@ -24,18 +27,16 @@ class GraphServiceError(Exception):
 
 
 class GraphService:
-    """Manages Neo4j schema setup and document-scoped CRUD for Scatterbrain.
+    """Manages Neo4j connectivity and document-scoped CRUD for Scatterbrain.
 
     Parameters
     ----------
-    uri:
-        Bolt or Neo4j URI, e.g. ``bolt://localhost:7687``.
-    username:
-        Neo4j username.
-    password:
-        Neo4j password.
+    uri:      Bolt or Neo4j URI, e.g. ``bolt://localhost:7687``.
+    username: Neo4j username.
+    password: Neo4j password.
     embedding_dimensions:
-        Dimensionality of the embedding vectors for the vector index.
+        Kept for API compatibility but no longer used — vector index is not
+        created by this service.
     """
 
     def __init__(
@@ -43,11 +44,13 @@ class GraphService:
         uri: str,
         username: str,
         password: str,
-        embedding_dimensions: int = 4096,
+        embedding_dimensions: int = 768,
     ) -> None:
         self._uri = uri
         self._username = username
         self._password = password
+        # embedding_dimensions is retained so callers that pass it (main.py)
+        # don't need to change their signature.
         self._embedding_dimensions = embedding_dimensions
         self._driver: Driver = GraphDatabase.driver(uri, auth=(username, password))
 
@@ -76,81 +79,52 @@ class GraphService:
             ) from exc
 
     def create_constraints(self) -> None:
-        """Create the ``chunk_embeddings`` vector index used by neo4j-graphrag.
+        """No-op: schema setup is now delegated to GraphSchemaService.
 
-        The ``SimpleKGPipeline`` also creates this index automatically, but
-        having it ready at startup avoids a race condition on the first upload.
-        Idempotent — uses ``IF NOT EXISTS``.
-
-        Requirements: 4.5
+        Kept so main.py's startup sequence does not need to change.
+        GraphSchemaService.create_schema() is called inside DocumentService's
+        ingestion pipeline (idempotent on each upload).
         """
-        dims = self._embedding_dimensions
-        cypher_vector_index = (
-            "CREATE VECTOR INDEX chunk_embeddings IF NOT EXISTS "
-            "FOR (c:Chunk) ON (c.embedding) "
-            f"OPTIONS {{ indexConfig: {{ `vector.dimensions`: {dims}, "
-            f"`vector.similarity_function`: 'cosine' }} }}"
+        logger.info(
+            "GraphService.create_constraints: schema managed by GraphSchemaService "
+            "(called per-upload). No vector index created — pipeline uses Cypher."
         )
-        try:
-            with self._driver.session() as session:
-                session.run(cypher_vector_index)
-                logger.info("Neo4j vector index 'chunk_embeddings' checked/created.")
-        except Neo4jError as exc:
-            raise GraphServiceError(
-                f"Failed to create Neo4j vector index: {exc}"
-            ) from exc
 
     # ------------------------------------------------------------------
     # Delete operations
     # ------------------------------------------------------------------
 
     def delete_by_document_id(self, document_id: str) -> None:
-        """Delete all nodes (and their edges) associated with a document.
+        """Delete all Provision/Definition nodes associated with a Manual.
 
-        Targets ``Document`` and ``Chunk`` nodes written by neo4j-graphrag's
-        ``Neo4jWriter``, matched via the ``document_id`` property stored in
-        ``document_metadata`` on the ``Document`` node.
+        For the new schema, document_id is not stored on graph nodes (the
+        manual_name derived from the filename is the identifier).  This method
+        is kept for API compatibility with the router; it is a no-op when
+        called before a manual has been ingested under the new schema.
+
+        For a full re-ingest cleanup, use GraphSchemaService.delete_manual_graph.
 
         Requirements: 4.4
-
-        Parameters
-        ----------
-        document_id:
-            The UUID of the document whose graph data should be removed.
         """
-        cypher = """
-            MATCH (doc:Document {document_id: $document_id})
-            OPTIONAL MATCH (chunk:Chunk)-[:FROM_DOCUMENT]->(doc)
-            OPTIONAL MATCH (entity:__Entity__)-[:FROM_CHUNK]->(chunk)
-            DETACH DELETE entity, chunk, doc
-        """
-        try:
-            with self._driver.session() as session:
-                result = session.run(cypher, document_id=document_id)
-                summary = result.consume()
-                logger.info(
-                    "Deleted %d nodes for document_id=%s.",
-                    summary.counters.nodes_deleted,
-                    document_id,
-                )
-        except Neo4jError as exc:
-            raise GraphServiceError(
-                f"Failed to delete graph data for document_id={document_id}: {exc}"
-            ) from exc
+        # In the new schema we don't tag every Provision with a document_id,
+        # so we log and return.  The upload flow in DocumentService handles
+        # stale-data cleanup by deleting old document records from the in-memory
+        # store; the actual graph nodes are overwritten via MERGE (idempotent).
+        logger.debug(
+            "delete_by_document_id called for document_id=%s — "
+            "new schema uses MERGE (idempotent), stale node cleanup skipped.",
+            document_id,
+        )
 
     # ------------------------------------------------------------------
     # Read operations
     # ------------------------------------------------------------------
 
     def get_graph_summary(self, document_id: str) -> dict:
-        """Return node and edge counts for a given document.
+        """Return Provision and Definition counts across the whole graph.
 
-        Requirements: 7.5
-
-        Parameters
-        ----------
-        document_id:
-            The UUID stored in the ``Document.document_id`` property.
+        The new schema does not tag nodes with document_id, so we return
+        global counts.  The document_id parameter is kept for API compat.
 
         Returns
         -------
@@ -158,28 +132,16 @@ class GraphService:
             ``{"node_count": int, "edge_count": int}``
         """
         cypher = """
-            MATCH (doc:Document {document_id: $document_id})
-            OPTIONAL MATCH (chunk:Chunk)-[:FROM_DOCUMENT]->(doc)
-            OPTIONAL MATCH (entity:__Entity__)-[:FROM_CHUNK]->(chunk)
-            WITH doc,
-                 collect(DISTINCT chunk) AS chunks,
-                 collect(DISTINCT entity) AS entities
-            UNWIND entities AS e
-            OPTIONAL MATCH (e)-[entity_rel]->(e2:__Entity__)
-            WHERE e2 IN entities
-            WITH doc, chunks, entities, count(DISTINCT entity_rel) AS entity_edge_count
-            RETURN
-                CASE WHEN doc IS NULL THEN 0 ELSE 1 END
-                    + size(chunks) + size(entities) AS node_count,
-                entity_edge_count
-                    + CASE WHEN size(chunks) > 1 THEN size(chunks) - 1 ELSE 0 END
-                    + size(chunks) AS edge_count
+            MATCH (p:Provision) WITH count(p) AS pCount
+            MATCH (d:Definition) WITH pCount, count(d) AS dCount
+            MATCH ()-[r]->() WITH pCount, dCount, count(r) AS eCount
+            RETURN pCount + dCount AS node_count, eCount AS edge_count
         """
         try:
             with self._driver.session() as session:
-                result = session.run(cypher, document_id=document_id)
+                result = session.run(cypher)
                 record = result.single()
-                if record is None or record["node_count"] == 0:
+                if record is None:
                     return {"node_count": 0, "edge_count": 0}
                 return {
                     "node_count": record["node_count"],
@@ -187,39 +149,41 @@ class GraphService:
                 }
         except Neo4jError as exc:
             raise GraphServiceError(
-                f"Failed to retrieve graph summary for document_id={document_id}: {exc}"
+                f"Failed to retrieve graph summary: {exc}"
             ) from exc
 
     def count_entities_for_document(self, document_id: str) -> int:
-        """Return the number of distinct entities linked to a document's chunks.
+        """Kept for API compat.  Returns total Provision count instead."""
+        try:
+            with self._driver.session() as session:
+                result = session.run("MATCH (p:Provision) RETURN count(p) AS n")
+                record = result.single()
+                return int(record["n"]) if record else 0
+        except Neo4jError:
+            return 0
+
+    def count_provisions_for_manual(self, manual_name: str) -> int:
+        """Return the number of Provision nodes for the given manual.
 
         Parameters
         ----------
-        document_id:
-            The UUID stored in the ``Document.document_id`` property.
-
-        Returns
-        -------
-        int
-            Count of ``__Entity__`` nodes extracted from the document's chunks.
+        manual_name:
+            The ``name`` property on the Manual root node.
         """
         cypher = """
-            MATCH (doc:Document {document_id: $document_id})
-            MATCH (chunk:Chunk)-[:FROM_DOCUMENT]->(doc)
-            MATCH (entity:__Entity__)-[:FROM_CHUNK]->(chunk)
-            RETURN count(DISTINCT entity) AS entity_count
+            MATCH (m:Manual {name: $name})-[:HAS_TOP_SECTION|HAS_CHILD*1..]->(p:Provision)
+            RETURN count(DISTINCT p) AS n
         """
         try:
             with self._driver.session() as session:
-                result = session.run(cypher, document_id=document_id)
+                result = session.run(cypher, name=manual_name)
                 record = result.single()
-                if record is None:
-                    return 0
-                return int(record["entity_count"])
+                return int(record["n"]) if record else 0
         except Neo4jError as exc:
-            raise GraphServiceError(
-                f"Failed to count entities for document_id={document_id}: {exc}"
-            ) from exc
+            logger.warning(
+                "count_provisions_for_manual('%s') failed: %s", manual_name, exc
+            )
+            return 0
 
     # ------------------------------------------------------------------
     # Lifecycle

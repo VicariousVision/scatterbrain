@@ -25,7 +25,7 @@ from backend.services.chat_service import ChatService
 from backend.services.document_service import DocumentService
 from backend.services.graph_query_service import GraphQueryService
 from backend.services.graph_service import GraphService, GraphServiceError
-from backend.services.ollama_adapters import OllamaEmbedderAdapter, OllamaLLMAdapter
+from backend.services.ollama_adapters import OllamaLLMAdapter
 from backend.services.ollama_client import OllamaClient
 
 logging.basicConfig(
@@ -51,12 +51,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         num_gpu=settings.ollama_num_gpu,
     )
 
-    # neo4j-graphrag adapters (LLM + Embedder)
+    # LLM adapter for chat response generation (Mistral 7B via Ollama).
     llm_adapter = OllamaLLMAdapter(
         ollama_client=ollama_client,
         model_name=settings.ollama_model,
     )
-    embedder_adapter = OllamaEmbedderAdapter(ollama_client=ollama_client)
+
+    # Separate Ollama client/adapter for Text2Cypher — uses the dedicated
+    # text2cypher model (default: qwen3.5:0.8b) as a local fallback when no
+    # paid-tier API key is configured.
+    text2cypher_ollama_client = OllamaClient(
+        base_url=settings.ollama_base_url,
+        model=settings.ollama_text2cypher_model,
+        embedding_model=settings.ollama_embedding_model,
+        num_gpu=settings.ollama_num_gpu,
+    )
+    text2cypher_fallback_llm = OllamaLLMAdapter(
+        ollama_client=text2cypher_ollama_client,
+        model_name=settings.ollama_text2cypher_model,
+    )
 
     # ------------------------------------------------------------------
     # Graph services
@@ -65,30 +78,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         uri=settings.neo4j_uri,
         username=settings.neo4j_username,
         password=settings.neo4j_password,
-        embedding_dimensions=settings.ollama_embedding_dimensions,
     )
 
     # ------------------------------------------------------------------
-    # Verify Neo4j connectivity and create vector index BEFORE
-    # GraphQueryService tries to validate that the index exists.
-    # (Requirement 8.5)
+    # Verify Neo4j connectivity (Requirement 8.5).
+    # Schema constraints are applied per-upload inside DocumentService.
     # ------------------------------------------------------------------
     try:
         graph_service.verify_connection()
-        graph_service.create_constraints()
-        logger.info("Neo4j connected and constraints applied.")
+        graph_service.create_constraints()  # logs that schema is managed per-upload
+        logger.info("Neo4j connected.")
     except GraphServiceError as exc:
         logger.error("Neo4j connection failed: %s. Starting in degraded state.", exc)
     except Exception as exc:  # noqa: BLE001
         logger.error("Unexpected Neo4j startup error: %s. Starting in degraded state.", exc)
 
-    # VectorCypherRetriever validates the index exists at init time, so
-    # GraphQueryService must be created AFTER create_constraints().
+    # GraphQueryService uses Text2CypherRetriever — no embedder required.
+    # Falls back to the local Ollama text2cypher model if no paid-tier key is set.
     graph_query_service = GraphQueryService(
         uri=settings.neo4j_uri,
         username=settings.neo4j_username,
         password=settings.neo4j_password,
-        embedder=embedder_adapter,
+        fallback_llm=text2cypher_fallback_llm,
     )
 
     # ------------------------------------------------------------------
