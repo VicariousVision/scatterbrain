@@ -9,7 +9,7 @@ Requirements: 5.3, 5.4, 5.5, 6.1, 6.2, 6.4, 6.5
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from neo4j_graphrag.generation import GraphRAG, RagTemplate
 
@@ -32,9 +32,6 @@ Do not fabricate facts.
 CONTEXT:
 {context}
 
-CONVERSATION HISTORY:
-{message_history}
-
 QUESTION:
 {query_text}
 
@@ -42,7 +39,7 @@ ANSWER:"""
 
 _PROMPT_TEMPLATE = RagTemplate(
     template=_LEGAL_PROMPT,
-    expected_inputs=["context", "query_text", "message_history"],
+    expected_inputs=["context", "query_text"],
 )
 
 
@@ -90,7 +87,8 @@ class ChatService:
         """
         # Truncate history to last 10 messages (Requirement 6.5)
         truncated = history[-10:] if len(history) > 10 else history
-        message_history_str = self._format_history(truncated)
+        # Convert history dicts to LLMMessage format for neo4j-graphrag
+        llm_history: Optional[List[Dict[str, str]]] = truncated or None
 
         logger.info("Running GraphRAG query: %s", user_query)
 
@@ -102,11 +100,7 @@ class ChatService:
             lambda: self._rag.search(
                 query_text=user_query,
                 retriever_config={"top_k": 5},
-                prompt_params={"message_history": message_history_str},
-                response_fallback=(
-                    "I don't have enough information in the knowledge graph "
-                    "to answer that question."
-                ),
+                message_history=llm_history,
             ),
         )
 

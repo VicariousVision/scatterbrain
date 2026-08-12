@@ -38,6 +38,7 @@ from neo4j import GraphDatabase
 from neo4j_graphrag.experimental.components.text_splitters.fixed_size_splitter import (
     FixedSizeSplitter,
 )
+from neo4j_graphrag.experimental.components.types import DocumentInfo
 from neo4j_graphrag.experimental.pipeline.kg_builder import SimpleKGPipeline
 
 from backend.config import settings

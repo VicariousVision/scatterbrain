@@ -50,7 +50,7 @@ class OllamaClient:
             OllamaClientError: If the request fails or the response cannot be parsed.
         """
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=300.0) as client:
                 response = await client.post(
                     f"{self.base_url}/api/embeddings",
                     json={"model": self.embedding_model, "prompt": text},
@@ -83,7 +83,7 @@ class OllamaClient:
             OllamaClientError: If the request fails or the response cannot be parsed.
         """
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 response = await client.post(
                     f"{self.base_url}/api/generate",
                     json={
