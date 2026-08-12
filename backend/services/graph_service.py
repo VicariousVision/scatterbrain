@@ -119,10 +119,10 @@ class GraphService:
             The UUID of the document whose graph data should be removed.
         """
         cypher = """
-            MATCH (doc:Document)
-            WHERE doc.document_id = $document_id
+            MATCH (doc:Document {document_id: $document_id})
             OPTIONAL MATCH (chunk:Chunk)-[:FROM_DOCUMENT]->(doc)
-            DETACH DELETE chunk, doc
+            OPTIONAL MATCH (entity:__Entity__)-[:FROM_CHUNK]->(chunk)
+            DETACH DELETE entity, chunk, doc
         """
         try:
             with self._driver.session() as session:
@@ -158,19 +158,28 @@ class GraphService:
             ``{"node_count": int, "edge_count": int}``
         """
         cypher = """
-            MATCH (doc:Document)
-            WHERE doc.document_id = $document_id
+            MATCH (doc:Document {document_id: $document_id})
             OPTIONAL MATCH (chunk:Chunk)-[:FROM_DOCUMENT]->(doc)
-            OPTIONAL MATCH (chunk)-[r]-()
+            OPTIONAL MATCH (entity:__Entity__)-[:FROM_CHUNK]->(chunk)
+            WITH doc,
+                 collect(DISTINCT chunk) AS chunks,
+                 collect(DISTINCT entity) AS entities
+            UNWIND entities AS e
+            OPTIONAL MATCH (e)-[entity_rel]->(e2:__Entity__)
+            WHERE e2 IN entities
+            WITH doc, chunks, entities, count(DISTINCT entity_rel) AS entity_edge_count
             RETURN
-                count(DISTINCT doc) + count(DISTINCT chunk) AS node_count,
-                count(DISTINCT r) AS edge_count
+                CASE WHEN doc IS NULL THEN 0 ELSE 1 END
+                    + size(chunks) + size(entities) AS node_count,
+                entity_edge_count
+                    + CASE WHEN size(chunks) > 1 THEN size(chunks) - 1 ELSE 0 END
+                    + size(chunks) AS edge_count
         """
         try:
             with self._driver.session() as session:
                 result = session.run(cypher, document_id=document_id)
                 record = result.single()
-                if record is None:
+                if record is None or record["node_count"] == 0:
                     return {"node_count": 0, "edge_count": 0}
                 return {
                     "node_count": record["node_count"],
@@ -179,6 +188,37 @@ class GraphService:
         except Neo4jError as exc:
             raise GraphServiceError(
                 f"Failed to retrieve graph summary for document_id={document_id}: {exc}"
+            ) from exc
+
+    def count_entities_for_document(self, document_id: str) -> int:
+        """Return the number of distinct entities linked to a document's chunks.
+
+        Parameters
+        ----------
+        document_id:
+            The UUID stored in the ``Document.document_id`` property.
+
+        Returns
+        -------
+        int
+            Count of ``__Entity__`` nodes extracted from the document's chunks.
+        """
+        cypher = """
+            MATCH (doc:Document {document_id: $document_id})
+            MATCH (chunk:Chunk)-[:FROM_DOCUMENT]->(doc)
+            MATCH (entity:__Entity__)-[:FROM_CHUNK]->(chunk)
+            RETURN count(DISTINCT entity) AS entity_count
+        """
+        try:
+            with self._driver.session() as session:
+                result = session.run(cypher, document_id=document_id)
+                record = result.single()
+                if record is None:
+                    return 0
+                return int(record["entity_count"])
+        except Neo4jError as exc:
+            raise GraphServiceError(
+                f"Failed to count entities for document_id={document_id}: {exc}"
             ) from exc
 
     # ------------------------------------------------------------------

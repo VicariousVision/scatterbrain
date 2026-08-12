@@ -50,41 +50,8 @@ from backend.services.ollama_client import OllamaClient
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Legal-domain schema for the SimpleKGPipeline
+# SimpleKGPipeline Configuration
 # ---------------------------------------------------------------------------
-
-_NODE_TYPES = [
-    "Person",
-    {"label": "Organization", "description": "A company, firm, or legal entity"},
-    {"label": "Contract", "description": "A legal agreement or document"},
-    {"label": "Clause", "description": "A specific section or provision within a contract"},
-    {"label": "Date", "description": "A date or time period referenced in the document"},
-    {"label": "Jurisdiction", "description": "A legal jurisdiction, country, or governing law"},
-    {"label": "Obligation", "description": "A duty, requirement, or liability described in the document"},
-]
-
-_RELATIONSHIP_TYPES = [
-    "PARTY_TO",
-    "GOVERNS",
-    "INCLUDES_CLAUSE",
-    "SUBJECT_TO",
-    "OBLIGATED_BY",
-    "EFFECTIVE_ON",
-    "SIGNED_BY",
-    "REPRESENTS",
-]
-
-_PATTERNS = [
-    ("Person", "PARTY_TO", "Contract"),
-    ("Organization", "PARTY_TO", "Contract"),
-    ("Contract", "INCLUDES_CLAUSE", "Clause"),
-    ("Contract", "SUBJECT_TO", "Jurisdiction"),
-    ("Person", "OBLIGATED_BY", "Obligation"),
-    ("Organization", "OBLIGATED_BY", "Obligation"),
-    ("Contract", "EFFECTIVE_ON", "Date"),
-    ("Person", "SIGNED_BY", "Contract"),
-    ("Person", "REPRESENTS", "Organization"),
-]
 
 
 class DocumentService:
@@ -230,7 +197,7 @@ class DocumentService:
         )
         try:
             # Small chunks keep each LLM call's prompt short, reducing peak RAM.
-            # 300-token chunks with 25-token overlap work well for CPU-only Mistral.
+            # chunk_size is in characters (FixedSizeSplitter default unit).
             text_splitter = FixedSizeSplitter(chunk_size=300, chunk_overlap=25)
 
             kg_pipeline = SimpleKGPipeline(
@@ -238,19 +205,37 @@ class DocumentService:
                 driver=driver,
                 embedder=self._embedder_adapter,
                 text_splitter=text_splitter,
-                from_pdf=False,
-                entities=_NODE_TYPES,
-                relations=_RELATIONSHIP_TYPES,
-                potential_schema=_PATTERNS,
+                from_file=False,
+                schema="EXTRACTED",
                 perform_entity_resolution=True,
-                on_error="IGNORE",
+                on_error="RAISE",
             )
 
-            result = await kg_pipeline.run_async(text=text)
+            result = await kg_pipeline.run_async(
+                text=text,
+                file_path=filename,
+                document_metadata={
+                    "document_id": document_id,
+                    "filename": filename,
+                },
+            )
             logger.info(
                 "SimpleKGPipeline finished for document_id=%s: %s",
                 document_id,
                 result,
+            )
+
+            entity_count = self._graph_service.count_entities_for_document(document_id)
+            if entity_count == 0:
+                raise RuntimeError(
+                    "Knowledge graph pipeline completed but no entities were "
+                    "extracted. Check that Ollama is running and the LLM "
+                    "returned valid extraction JSON."
+                )
+            logger.info(
+                "Knowledge graph written for document_id=%s: %d entities",
+                document_id,
+                entity_count,
             )
         finally:
             driver.close()

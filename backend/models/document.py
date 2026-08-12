@@ -39,6 +39,7 @@ class DocumentListItem(BaseModel):
     filename: str
     uploaded_at: datetime
     status: str  # "processing" | "completed" | "failed"
+    error: str | None = None
 
 
 class GraphSummary(BaseModel):

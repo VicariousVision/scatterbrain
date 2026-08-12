@@ -130,6 +130,7 @@ async def list_documents() -> List[DocumentListItem]:
             filename=r.filename,
             uploaded_at=r.uploaded_at,
             status=r.status,
+            error=r.error,
         )
         for r in records
     ]
@@ -153,6 +154,7 @@ async def get_document(document_id: str) -> DocumentListItem:
         filename=record.filename,
         uploaded_at=record.uploaded_at,
         status=record.status,
+        error=record.error,
     )
 
 

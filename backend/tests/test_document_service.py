@@ -19,7 +19,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.models.document import DocumentRecord
-from backend.models.entities import Entity, ExtractionResult, Relationship
 from backend.services.document_service import DocumentService
 
 
@@ -31,41 +30,16 @@ from backend.services.document_service import DocumentService
 def _make_graph_service() -> MagicMock:
     """Return a mock GraphService with no-op methods."""
     gs = MagicMock()
-    gs.store_entities = MagicMock()
-    gs.store_relationships = MagicMock()
-    gs.store_chunks = MagicMock()
-    gs.link_chunks_to_entities = MagicMock()
     gs.delete_by_document_id = MagicMock()
+    gs.count_entities_for_document = MagicMock(return_value=3)
     return gs
 
 
 def _make_ollama_client() -> MagicMock:
     """Return a mock OllamaClient."""
     client = MagicMock()
-    client.generate_embedding = AsyncMock(return_value=[0.1] * 4096)
+    client.generate_embedding = AsyncMock(return_value=[0.1] * 768)
     return client
-
-
-def _make_extraction_result(document_id: str) -> ExtractionResult:
-    """Return a minimal ExtractionResult for testing."""
-    return ExtractionResult(
-        entities=[
-            Entity(
-                id=str(uuid.uuid4()),
-                name="Acme Corp",
-                type="Organization",
-                document_id=document_id,
-            )
-        ],
-        relationships=[
-            Relationship(
-                source_entity="Acme Corp",
-                relationship_type="SIGNED",
-                target_entity="Contract A",
-                document_id=document_id,
-            )
-        ],
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +68,6 @@ def test_upload_returns_processing_record():
     assert record.status == "processing"
     assert record.filename == "contract.txt"
     assert isinstance(record.uploaded_at, datetime)
-    # document_id should be a valid UUID4
     parsed = uuid.UUID(record.document_id, version=4)
     assert str(parsed) == record.document_id
 
@@ -200,32 +173,28 @@ def test_processing_pipeline_sets_completed_on_success():
     )
 
     async def run():
-        async def fake_extract(text, document_id, client):
-            return _make_extraction_result(document_id)
-
         with (
             patch(
                 "backend.services.document_service.parse_document",
                 return_value="parsed text",
             ),
-            patch(
-                "backend.services.document_service.extract_entities",
-                side_effect=fake_extract,
-            ),
+            patch.object(
+                service,
+                "_run_kg_pipeline",
+                new_callable=AsyncMock,
+            ) as mock_kg_pipeline,
         ):
             record = await service.upload("contract.txt", b"hello")
-            # Allow the event loop to run the background task.
             await asyncio.sleep(0.1)
-        return record
+        return record, mock_kg_pipeline
 
-    record = asyncio.run(run())
+    record, mock_kg_pipeline = asyncio.run(run())
 
     updated = service.get_document(record.document_id)
     assert updated is not None
     assert updated.status == "completed"
     assert updated.error is None
-    graph_service.store_entities.assert_called_once()
-    graph_service.store_relationships.assert_called_once()
+    mock_kg_pipeline.assert_awaited_once()
 
 
 def test_processing_pipeline_sets_failed_on_parse_error():
@@ -254,6 +223,40 @@ def test_processing_pipeline_sets_failed_on_parse_error():
     assert "Unsupported file type" in updated.error
 
 
+def test_processing_pipeline_sets_failed_when_no_entities_extracted():
+    """Background pipeline should fail when the KG pipeline writes no entities."""
+    graph_service = _make_graph_service()
+    graph_service.count_entities_for_document = MagicMock(return_value=0)
+    service = DocumentService(
+        graph_service=graph_service,
+        ollama_client=_make_ollama_client(),
+    )
+
+    async def run():
+        with (
+            patch(
+                "backend.services.document_service.parse_document",
+                return_value="parsed text",
+            ),
+            patch(
+                "backend.services.document_service.SimpleKGPipeline",
+            ) as mock_pipeline_cls,
+        ):
+            mock_pipeline = mock_pipeline_cls.return_value
+            mock_pipeline.run_async = AsyncMock(return_value=MagicMock())
+            record = await service.upload("contract.txt", b"hello")
+            await asyncio.sleep(0.1)
+        return record
+
+    record = asyncio.run(run())
+
+    updated = service.get_document(record.document_id)
+    assert updated is not None
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "no entities were extracted" in updated.error.lower()
+
+
 # ---------------------------------------------------------------------------
 # Re-upload / stale data deletion tests
 # ---------------------------------------------------------------------------
@@ -267,7 +270,6 @@ def test_reupload_deletes_stale_graph_data():
         ollama_client=_make_ollama_client(),
     )
 
-    # Seed a previous completed upload for the same filename.
     old_id = str(uuid.uuid4())
     service._store[old_id] = DocumentRecord(
         document_id=old_id,
@@ -277,17 +279,15 @@ def test_reupload_deletes_stale_graph_data():
     )
 
     async def run():
-        async def fake_extract(text, document_id, client):
-            return _make_extraction_result(document_id)
-
         with (
             patch(
                 "backend.services.document_service.parse_document",
                 return_value="new text",
             ),
-            patch(
-                "backend.services.document_service.extract_entities",
-                side_effect=fake_extract,
+            patch.object(
+                service,
+                "_run_kg_pipeline",
+                new_callable=AsyncMock,
             ),
         ):
             new_record = await service.upload("contract.txt", b"new content")
@@ -296,9 +296,7 @@ def test_reupload_deletes_stale_graph_data():
 
     new_record = asyncio.run(run())
 
-    # The old document_id's graph data should have been deleted.
     graph_service.delete_by_document_id.assert_called_once_with(old_id)
-    # The new document should be completed.
     updated = service.get_document(new_record.document_id)
     assert updated is not None
     assert updated.status == "completed"
