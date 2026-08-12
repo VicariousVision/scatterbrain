@@ -2,17 +2,19 @@
 
 Step 4 of the ingestion pipeline:
   1. Takes each ProvisionChunk from provision_chunker.py.
-  2. Sends it to Mistral 7B (Ollama, CPU) with a domain-specific JSON prompt.
+  2. Sends it to the configured Ollama model (CPU) with a domain-specific JSON prompt.
   3. Parses the extraction result.
   4. MERGEs everything into Neo4j against the schema in graph_schema_service.py.
 
 Concurrency
 -----------
-The OllamaClient already serialises calls via a module-level Semaphore(1).
-At this layer we use asyncio.gather over the provision list so the event loop
-can pipeline I/O (Neo4j writes, prompt construction) while Ollama is busy.
-On CPU-only hardware with 24 GB RAM, OLLAMA_NUM_PARALLEL=1 is the right cap;
-if you set it to 2 and test stability, raise _EXTRACTION_CONCURRENCY to 2.
+Both this layer and the OllamaClient use the same OLLAMA_MAX_PARALLEL env var
+to control how many Ollama calls run simultaneously.
+
+For qwen3.5:0.8b (tiny model) on CPU with ≥16 GB RAM, start with
+OLLAMA_MAX_PARALLEL=4 and also set OLLAMA_NUM_PARALLEL=4 in the Ollama server
+environment before running `ollama serve`.  For larger models (≥7B), keep it
+at 1 or 2.
 
 Output shapes accepted from the LLM (see prompt below):
 {
@@ -30,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -43,15 +46,18 @@ from backend.services.provision_chunker import DefinitionChunk, ProvisionChunk
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Concurrency cap for concurrent extraction tasks.
-# Each task is blocked at the Ollama semaphore anyway (Semaphore(1) in
-# ollama_client.py), so this controls how many tasks queue up simultaneously
-# (limits memory usage from holding many prompts in-flight).
+# Concurrency cap — must not exceed OLLAMA_MAX_PARALLEL in ollama_client.py.
+# Both default to the same env var so they stay in sync automatically.
 # ---------------------------------------------------------------------------
-_EXTRACTION_CONCURRENCY = 2
+_EXTRACTION_CONCURRENCY: int = int(os.environ.get("OLLAMA_MAX_PARALLEL", "1"))
 
-# Max tokens for the extraction output — always a small JSON object.
-_EXTRACTION_MAX_TOKENS = 200
+# Max tokens for the extraction output.
+# The JSON object for a single provision can be ~300-400 tokens; 512 gives
+# comfortable headroom without wasting generation time.
+_EXTRACTION_MAX_TOKENS = 512
+
+# Log a progress line every N provisions so long runs show throughput.
+_PROGRESS_INTERVAL = 50
 
 # ---------------------------------------------------------------------------
 # Extraction prompt
@@ -509,9 +515,18 @@ async def extract_and_load_all(
     logger.info("Phase 1 complete: structural nodes written.")
 
     # Phase 2: concurrent extraction + edge writes.
+    total = len(provisions)
+    completed = 0
     semaphore = asyncio.Semaphore(_EXTRACTION_CONCURRENCY)
+    lock = asyncio.Lock()  # protects the progress counter
+
+    logger.info(
+        "Phase 2 starting: %d provisions, concurrency=%d, max_tokens=%d.",
+        total, _EXTRACTION_CONCURRENCY, _EXTRACTION_MAX_TOKENS,
+    )
 
     async def _extract_one(chunk: ProvisionChunk) -> None:
+        nonlocal completed
         async with semaphore:
             extraction = await extract_provision(chunk, client)
         try:
@@ -520,6 +535,13 @@ async def extract_and_load_all(
             logger.error(
                 "Neo4j error writing extraction for %s: %s", chunk.path, exc
             )
+        async with lock:
+            completed += 1
+            if completed % _PROGRESS_INTERVAL == 0 or completed == total:
+                logger.info(
+                    "Phase 2 progress: %d/%d provisions processed (%.0f%%).",
+                    completed, total, completed / total * 100,
+                )
 
     await asyncio.gather(*[_extract_one(c) for c in provisions])
     logger.info("Phase 2 complete: extraction edges written.")

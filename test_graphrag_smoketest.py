@@ -48,7 +48,7 @@ NEO4J_URI = settings.neo4j_uri
 NEO4J_USER = settings.neo4j_username
 NEO4J_PASSWORD = settings.neo4j_password
 OLLAMA_URL = settings.ollama_base_url
-OLLAMA_MODEL = settings.ollama_model             # "mistral"
+OLLAMA_MODEL = settings.ollama_model             
 OLLAMA_EMBED_MODEL = settings.ollama_embedding_model  # "nomic-embed-text"
 OLLAMA_NUM_GPU = settings.ollama_num_gpu
 

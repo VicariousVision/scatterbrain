@@ -31,10 +31,17 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Shared concurrency guard
 # ---------------------------------------------------------------------------
-# Semaphore(1): only one Ollama call (embedding OR generation) in-flight at a
-# time.  Raise to 2 only if you have confirmed Ollama can handle 2 concurrent
-# requests on your hardware without degrading (OLLAMA_NUM_PARALLEL >= 2 and
-# sufficient RAM — ~8 GB free for two simultaneous mistral 7B inferences).
+# Controls how many Ollama calls (embedding OR generation) run simultaneously.
+#
+# Override via OLLAMA_MAX_PARALLEL env var.  Recommended values:
+#   1  — safe default for any hardware; fully sequential
+#   2  — good for small models (≤3B) on CPU with ≥16 GB RAM
+#   4  — suitable for qwen3.5:0.8b or similar tiny models on ≥24 GB RAM
+#
+# Also set OLLAMA_NUM_PARALLEL to the same value in your Ollama server
+# environment so Ollama accepts concurrent requests without queuing them
+# internally (e.g. `set OLLAMA_NUM_PARALLEL=4` before `ollama serve`).
+_OLLAMA_MAX_PARALLEL: int = int(os.environ.get("OLLAMA_MAX_PARALLEL", "1"))
 _OLLAMA_SEMAPHORE: asyncio.Semaphore | None = None
 
 
@@ -47,7 +54,12 @@ def _get_semaphore() -> asyncio.Semaphore:
     """
     global _OLLAMA_SEMAPHORE
     if _OLLAMA_SEMAPHORE is None:
-        _OLLAMA_SEMAPHORE = asyncio.Semaphore(1)
+        _OLLAMA_SEMAPHORE = asyncio.Semaphore(_OLLAMA_MAX_PARALLEL)
+        logger.info(
+            "Ollama concurrency semaphore initialised: %d slot(s). "
+            "Set OLLAMA_MAX_PARALLEL env var to change.",
+            _OLLAMA_MAX_PARALLEL,
+        )
     return _OLLAMA_SEMAPHORE
 
 
