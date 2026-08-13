@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     ollama_embedding_dimensions: int = 768
     # 0 = CPU-only (no GPU layers offloaded).
     ollama_num_gpu: int = 0
+    # Concurrent Ollama requests during ingestion.  Set OLLAMA_NUM_PARALLEL to
+    # this value before starting Ollama: `set OLLAMA_NUM_PARALLEL=4 && ollama serve`
+    ollama_max_parallel: int = 1
     # Model used for Text2Cypher query generation when no paid-tier key is set.
     # Any model available in your local Ollama instance can be used here.
     ollama_text2cypher_model: str = "qwen3.5:0.8b"

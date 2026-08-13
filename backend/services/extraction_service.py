@@ -52,9 +52,12 @@ logger = logging.getLogger(__name__)
 _EXTRACTION_CONCURRENCY: int = int(os.environ.get("OLLAMA_MAX_PARALLEL", "1"))
 
 # Max tokens for the extraction output.
-# The JSON object for a single provision can be ~300-400 tokens; 512 gives
-# comfortable headroom without wasting generation time.
-_EXTRACTION_MAX_TOKENS = 512
+# qwen3 models emit a <think>...</think> chain-of-thought block before the JSON
+# answer.  With thinking enabled that block alone can exceed 512 tokens, leaving
+# no budget for the actual output and causing empty responses.  We disable
+# thinking via the Ollama `think=False` option (supported by qwen3 family) and
+# keep a generous ceiling so that any residual preamble doesn't crowd out output.
+_EXTRACTION_MAX_TOKENS = 1024
 
 # Log a progress line every N provisions so long runs show throughput.
 _PROGRESS_INTERVAL = 50
@@ -192,6 +195,7 @@ async def extract_provision(
             prompt,
             json_mode=True,
             max_tokens=_EXTRACTION_MAX_TOKENS,
+            think=False,
         )
     except OllamaClientError as exc:
         logger.error(

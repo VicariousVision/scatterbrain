@@ -231,7 +231,14 @@ class OllamaClient:
                 f"Unexpected response format from Ollama /api/embeddings: {exc}"
             ) from exc
 
-    async def generate(self, prompt: str, *, json_mode: bool = False, max_tokens: int | None = None) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        json_mode: bool = False,
+        max_tokens: int | None = None,
+        think: bool | None = None,
+    ) -> str:
         """Send ``prompt`` to ``/api/generate`` and return the response text.
 
         Args:
@@ -242,6 +249,11 @@ class OllamaClient:
             max_tokens: If set, passed as ``num_predict`` in the options dict
                         to cap output length.  Useful for extraction calls
                         where the output is always small (~150 tokens).
+            think:      If ``False``, disables chain-of-thought reasoning for
+                        qwen3 / thinking-capable models.  Pass ``False`` for
+                        extraction calls to prevent the <think> block from
+                        consuming the entire token budget before any JSON is
+                        emitted.  Ignored (not sent) when ``None``.
 
         Raises:
             OllamaClientError: On request failure or unexpected response format.
@@ -258,6 +270,8 @@ class OllamaClient:
         }
         if json_mode:
             payload["format"] = "json"
+        if think is not None:
+            payload["think"] = think
 
         try:
             response = await self._post_with_retry("/api/generate", payload)
