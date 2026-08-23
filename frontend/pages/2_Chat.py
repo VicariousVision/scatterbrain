@@ -23,10 +23,9 @@ if str(_frontend_root) not in sys.path:
 import api_client  # noqa: E402  (import after sys.path fixup)
 
 # ---------------------------------------------------------------------------
-# Page configuration
+# Page header
 # ---------------------------------------------------------------------------
 
-st.set_page_config(page_title="Chat — Scatterbrain", layout="wide")
 st.title("💬 Chat with Your Documents")
 
 # ---------------------------------------------------------------------------

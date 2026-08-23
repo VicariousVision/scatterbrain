@@ -313,10 +313,20 @@ class GraphQueryService:
         try:
             result = await loop.run_in_executor(
                 None,
-                lambda: self._retriever.search(query_text=query, top_k=top_k),
+                lambda: self._retriever.search(query_text=query),
             )
         except Exception as exc:
-            logger.error("Text2CypherRetriever.search failed: %s", exc)
+            exc_msg = str(exc)
+            logger.error("Text2CypherRetriever.search failed: %s", exc_msg)
+
+            # Surface a more helpful message when the LLM clearly produced
+            # garbage instead of valid Cypher.
+            if "Unexpected end of input" in exc_msg or "expected CYPHER" in exc_msg:
+                logger.error(
+                    "The Text2Cypher LLM likely returned invalid output instead "
+                    "of a Cypher query.  Consider using a larger model for "
+                    "ollama_text2cypher_model (e.g. qwen3:1.7b or mistral)."
+                )
             return "No relevant graph data found for this query."
 
         if not result.items:

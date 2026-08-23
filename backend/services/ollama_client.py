@@ -42,25 +42,18 @@ logger = logging.getLogger(__name__)
 # environment so Ollama accepts concurrent requests without queuing them
 # internally (e.g. `set OLLAMA_NUM_PARALLEL=4` before `ollama serve`).
 _OLLAMA_MAX_PARALLEL: int = int(os.environ.get("OLLAMA_MAX_PARALLEL", "1"))
-_OLLAMA_SEMAPHORE: asyncio.Semaphore | None = None
-
+_OLLAMA_SEMAPHORES: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
 
 def _get_semaphore() -> asyncio.Semaphore:
-    """Return the module-level semaphore, creating it lazily inside the running loop.
-
-    asyncio.Semaphore must be created inside the event loop.  Creating it at
-    module import time works in Python 3.10+ but raises a DeprecationWarning
-    in 3.9 and fails if no loop is running.  Lazy init is the safe approach.
-    """
-    global _OLLAMA_SEMAPHORE
-    if _OLLAMA_SEMAPHORE is None:
-        _OLLAMA_SEMAPHORE = asyncio.Semaphore(_OLLAMA_MAX_PARALLEL)
+    """Return the module-level semaphore, creating it lazily for the running loop."""
+    loop = asyncio.get_running_loop()
+    if loop not in _OLLAMA_SEMAPHORES:
+        _OLLAMA_SEMAPHORES[loop] = asyncio.Semaphore(_OLLAMA_MAX_PARALLEL)
         logger.info(
-            "Ollama concurrency semaphore initialised: %d slot(s). "
-            "Set OLLAMA_MAX_PARALLEL env var to change.",
+            "Ollama concurrency semaphore initialised for new event loop: %d slot(s).",
             _OLLAMA_MAX_PARALLEL,
         )
-    return _OLLAMA_SEMAPHORE
+    return _OLLAMA_SEMAPHORES[loop]
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +73,7 @@ _RETRYABLE = (httpx.ConnectTimeout, httpx.ConnectError)
 # is where failures have been observed on CPU hardware.
 _CALL_TIMEOUT = httpx.Timeout(
     connect=30.0,   # time to establish TCP connection
-    read=120.0,     # time waiting for the response body (generation can be slow)
+    read=1000.0,     # time waiting for the response body (generation can be slow)
     write=30.0,     # time to send the request body
     pool=30.0,      # time waiting for a connection from the httpx pool
 )

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
+import re
 from typing import Any, List, Optional, Union
 
 from neo4j_graphrag.llm import LLMInterface, LLMResponse
@@ -25,6 +26,23 @@ logger = logging.getLogger(__name__)
 # Serialise all LLM calls — the OllamaClient semaphore already does this for
 # async callers, but the sync invoke() path uses a thread so we also guard here.
 _LLM_SEMAPHORE = asyncio.Semaphore(1)
+
+# ---------------------------------------------------------------------------
+# Thinking-model output cleaner
+# ---------------------------------------------------------------------------
+# qwen3 / qwen3.5 models emit a <think>…</think> block before the actual
+# answer when chain-of-thought is enabled.  The neo4j-graphrag
+# Text2CypherRetriever passes the raw LLMResponse.content straight into
+# Neo4j as Cypher, so any residual <think> block causes a parse error.
+#
+# We strip these blocks in the adapter so every downstream consumer
+# (Text2CypherRetriever, ChatService, etc.) gets clean output.
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Remove ``<think>…</think>`` blocks emitted by thinking-capable models."""
+    return _THINK_RE.sub("", text).strip()
 
 
 def _run_async(coro: Any) -> Any:
@@ -63,8 +81,15 @@ class OllamaLLMAdapter(LLMInterface):
         message_history: Optional[Union[List[LLMMessage], MessageHistory]] = None,
         system_instruction: Optional[str] = None,
     ) -> LLMResponse:
-        """Synchronous text generation via Ollama."""
-        text = _run_async(self._client.generate(input))
+        """Synchronous text generation via Ollama.
+
+        Disables chain-of-thought (``think=False``) to prevent ``<think>``
+        blocks from polluting structured outputs like Cypher queries, and
+        strips any residual ``<think>`` content as a safety net.
+        """
+        text = _run_async(self._client.generate(input, think=False))
+        text = _strip_think_blocks(text)
+        logger.debug("OllamaLLMAdapter.invoke raw output (first 500 chars): %s", text[:500])
         return LLMResponse(content=text)
 
     async def ainvoke(
@@ -73,9 +98,15 @@ class OllamaLLMAdapter(LLMInterface):
         message_history: Optional[Union[List[LLMMessage], MessageHistory]] = None,
         system_instruction: Optional[str] = None,
     ) -> LLMResponse:
-        """Async text generation via Ollama."""
+        """Async text generation via Ollama.
+
+        Disables chain-of-thought (``think=False``) and strips residual
+        ``<think>`` blocks.
+        """
         async with _LLM_SEMAPHORE:
-            text = await self._client.generate(input)
+            text = await self._client.generate(input, think=False)
+        text = _strip_think_blocks(text)
+        logger.debug("OllamaLLMAdapter.ainvoke raw output (first 500 chars): %s", text[:500])
         return LLMResponse(content=text)
 
 
