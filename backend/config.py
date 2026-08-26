@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     ollama_text2cypher_model: str = "qwen3.5:0.8b"
 
     # ---------------------------------------------------------------------------
-    # Paid-tier LLM for Text2Cypher query generation (Step 5).
+    # Paid-tier LLM for Text2Cypher query generation (legacy auto-select path).
     # Set ONE of these in your .env.  The service checks them in this order:
     #   1. ANTHROPIC_API_KEY  → Claude claude-haiku-4-5
     #   2. DEEPSEEK_API_KEY   → DeepSeek V3/Chat (OpenAI-compatible)
@@ -34,6 +34,26 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None
+
+    # ---------------------------------------------------------------------------
+    # DeepSeek Chat API (explicit Q&A backend — selected from the Chat UI).
+    # Separate from DEEPSEEK_API_KEY so the auto-select Text2Cypher path is
+    # not affected when the user only wants the Chat UI backend.
+    # Set DEEPSEEK_CHAT_API_KEY in .env to enable the "DeepSeek" option.
+    # ---------------------------------------------------------------------------
+    deepseek_chat_api_key: Optional[str] = None
+    # DeepSeek model to use for both Cypher generation and answer synthesis.
+    deepseek_chat_model: str = "deepseek-chat"
+
+    # ---------------------------------------------------------------------------
+    # OpenRouter API (explicit Q&A backend — selected from the Chat UI).
+    # Set OPENROUTER_API_KEY in .env to enable the "OpenRouter" option.
+    # Free-tier models are tried first (round-robin), then paid tiers.
+    # ---------------------------------------------------------------------------
+    openrouter_api_key: Optional[str] = None
+    # Site info forwarded in HTTP headers as required by OpenRouter.
+    openrouter_site_url: str = "http://localhost:3000"
+    openrouter_site_name: str = "Scatterbrain"
 
     backend_url: str = "http://localhost:8000"
 

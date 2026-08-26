@@ -9,7 +9,8 @@ POST /chat/query
     pipeline via :class:`~backend.services.chat_service.ChatService`, and
     return a :class:`~backend.models.chat.ChatResponse`.
 
-    Returns 503 Service Unavailable if Ollama is unreachable.
+    Returns 503 Service Unavailable if Ollama is unreachable (Ollama backend).
+    Returns 400 Bad Request if a required API key is missing for external backends.
 
 Requirements: 5.2, 5.5
 """
@@ -67,19 +68,21 @@ def _require_chat_service() -> ChatService:
 async def chat_query(request: ChatRequest) -> ChatResponse:
     """Process a chat query using the graph-RAG pipeline.
 
-    Accepts the user's query and current conversation history, retrieves
-    relevant graph context, constructs a grounded prompt, and returns the
-    LLM response together with the updated message history.
+    Accepts the user's query, conversation history, and selected backend.
+    Retrieves relevant graph context, constructs a grounded prompt, and
+    returns the LLM response together with the updated message history.
 
-    Returns 503 if the Ollama LLM service is unavailable.
+    Returns 503 if the Ollama LLM service is unavailable (Ollama backend).
+    Returns 400 if a required external API key is missing.
 
     Requirements: 5.2, 5.5
     """
     svc = _require_chat_service()
     try:
-        response_text, updated_history = await svc.query(
+        response_text, updated_history, generated_cypher, cypher_source = await svc.query(
             user_query=request.query,
             history=request.history,
+            backend=request.backend,
         )
     except OllamaClientError as exc:
         logger.error("Ollama unavailable during chat query: %s", exc)
@@ -87,5 +90,31 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The LLM service (Ollama) is currently unavailable. Please try again later.",
         ) from exc
+    except PermissionError as exc:
+        # Invalid or expired external API key.
+        logger.error("External API auth error: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+    except RuntimeError as exc:
+        # "All models exhausted" → 503; missing API key config → 400.
+        exc_msg = str(exc)
+        logger.error("Chat runtime error: %s", exc_msg)
+        if "unavailable" in exc_msg.lower() or "rate-limited" in exc_msg.lower():
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=exc_msg,
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=exc_msg,
+        ) from exc
 
-    return ChatResponse(response=response_text, history=updated_history)
+    return ChatResponse(
+        response=response_text,
+        history=updated_history,
+        backend=request.backend,
+        generated_cypher=generated_cypher,
+        cypher_source=cypher_source,
+    )

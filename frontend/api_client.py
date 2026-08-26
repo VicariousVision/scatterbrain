@@ -147,12 +147,14 @@ def get_graph_summary(document_id: str) -> dict:
         return response.json()
 
 
-def chat_query(query: str, history: list) -> dict:
+def chat_query(query: str, history: list, backend: str = "ollama") -> dict:
     """Submit a chat query to the backend and return the LLM response.
 
-    Sends a POST request to ``/chat/query`` with a 120-second timeout.
+    Sends a POST request to ``/chat/query`` with a 180-second timeout
+    (external APIs can be slower than local Ollama on first call).
     Returns the parsed JSON body containing ``response`` (the LLM answer
-    text) and ``history`` (the updated message history).
+    text), ``history`` (the updated message history), and ``backend``
+    (echoed back from the server).
 
     Requirements: 5.2
 
@@ -163,17 +165,20 @@ def chat_query(query: str, history: list) -> dict:
     history:
         The current Chat Session message history as a list of
         ``{"role": "user"|"assistant", "content": str}`` dicts.
+    backend:
+        LLM backend to use: ``"ollama"`` (default), ``"deepseek"``, or
+        ``"openrouter"``.
 
     Raises
     ------
     httpx.HTTPStatusError
         If the backend returns a non-2xx status code (e.g. 503 when Ollama
-        is unavailable).
+        is unavailable, or 400 when an API key is missing).
     """
-    with httpx.Client(timeout=120.0) as client:
+    with httpx.Client(timeout=180.0) as client:
         response = client.post(
             f"{BACKEND_URL}/chat/query",
-            json={"query": query, "history": history},
+            json={"query": query, "history": history, "backend": backend},
         )
         response.raise_for_status()
         return response.json()

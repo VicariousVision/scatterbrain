@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any, Optional
 
 from neo4j import GraphDatabase, Driver
@@ -29,6 +30,110 @@ from neo4j_graphrag.llm import LLMInterface
 from neo4j_graphrag.retrievers import Text2CypherRetriever
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Cypher post-processing helpers
+# ---------------------------------------------------------------------------
+
+def _sanitize_cypher(cypher: str) -> str:
+    """Clean up common LLM Cypher generation errors.
+
+    Problems seen from free-tier models:
+      1. ``ORDER BY p`` — ordering by a node variable instead of a property;
+         invalid after WITH DISTINCT or aggregation because ``p`` is dropped.
+      2. Markdown fences (```cypher ... ```) wrapped around the query.
+      3. Trailing prose after the last semicolon or newline.
+      4. ``None`` returned by the model (null content) — treated as empty.
+
+    Strategy:
+      - Return empty string for None/empty input.
+      - Strip markdown fences.
+      - Remove ``ORDER BY`` clauses that reference bare node/rel variables
+        (single identifiers with no dot-property accessor).  Property
+        accesses like ``ORDER BY p.level, p.path`` are kept intact.
+    """
+    if not cypher:
+        return ""
+    # 1. Strip markdown code fences.
+    cypher = re.sub(r"```[a-zA-Z]*\n?", "", cypher).strip("`").strip()
+
+    # 2. Remove ORDER BY entries that are bare identifiers (no dot access).
+    #    e.g. "ORDER BY p.level, p" → "ORDER BY p.level"
+    #    e.g. "ORDER BY p"          → removed entirely
+    def _clean_order_by(match: re.Match) -> str:
+        clause = match.group(0)
+        # Split on comma, keep only items that contain a dot (property access)
+        # or are numeric / string literals.
+        items = [item.strip() for item in re.split(r",", clause[len("ORDER BY"):], flags=re.IGNORECASE)]
+        kept = [
+            item for item in items
+            if "." in item  # property access: p.level, p.path, etc.
+            or re.match(r"^['\"]", item)  # string literal
+            or re.match(r"^\d", item)     # numeric literal
+        ]
+        if not kept:
+            return ""
+        return "ORDER BY " + ", ".join(kept)
+
+    cypher = re.sub(
+        r"\bORDER\s+BY\s+[^\n]+",
+        _clean_order_by,
+        cypher,
+        flags=re.IGNORECASE,
+    )
+
+    # 3. Collapse multiple blank lines left by removal.
+    cypher = re.sub(r"\n{3,}", "\n\n", cypher).strip()
+
+    return cypher
+
+
+# ---------------------------------------------------------------------------
+# Fallback: direct keyword search when Text2Cypher fails
+# ---------------------------------------------------------------------------
+
+_KEYWORD_FALLBACK_QUERY = """
+MATCH (p:Provision)
+WHERE {where_clause}
+RETURN p.path AS path, p.heading AS heading, p.text AS text
+ORDER BY p.level, p.path
+LIMIT {limit}
+"""
+
+_CAPITAL_KEYWORDS = [
+    "capital", "foreign", "allowance", "limit", "transfer",
+    "invest", "abroad", "offshore", "remit",
+]
+
+def _extract_keywords(query: str, min_length: int = 4) -> list[str]:
+    """Extract meaningful words from *query* as search terms."""
+    stop = {
+        "what", "are", "the", "for", "and", "with", "that", "this",
+        "from", "have", "has", "can", "does", "will", "how", "which",
+        "when", "where", "is", "in", "of", "to", "a", "an", "do",
+        "company", "moving", "outside", "south", "africa",
+    }
+    words = re.findall(r"[a-zA-Z]+", query.lower())
+    return [w for w in words if len(w) >= min_length and w not in stop]
+
+
+def _build_fallback_cypher(query: str, limit: int = 5) -> str | None:
+    """Build a simple CONTAINS-based Cypher query from *query* keywords.
+
+    Returns None if no usable keywords were found.
+    """
+    keywords = _extract_keywords(query)
+    if not keywords:
+        return None
+
+    # Use at most the 4 most relevant keywords to avoid over-filtering.
+    terms = keywords[:4]
+    conditions = " OR ".join(
+        f"toLower(p.text) CONTAINS '{term}' OR toLower(p.heading) CONTAINS '{term}'"
+        for term in terms
+    )
+    return _KEYWORD_FALLBACK_QUERY.format(where_clause=conditions, limit=limit).strip()
 
 # ---------------------------------------------------------------------------
 # Schema description passed to Text2CypherRetriever
@@ -251,10 +356,9 @@ class GraphQueryService:
     Converts natural-language questions to Cypher via an LLM and executes the
     generated query against Neo4j.  No embedder or vector index is used.
 
-    When a paid-tier API key is configured (ANTHROPIC_API_KEY, DEEPSEEK_API_KEY,
-    or OPENAI_API_KEY) that model is preferred.  Otherwise the provided
-    ``fallback_llm`` (an OllamaLLMAdapter wrapping the local Ollama model) is
-    used so that Text2CypherRetriever is always available.
+    The default (Ollama) retriever is built at construction time.
+    Per-request external LLM retrievers (DeepSeek / OpenRouter) are built
+    on-demand and cached for the lifetime of this service.
 
     Parameters
     ----------
@@ -273,7 +377,11 @@ class GraphQueryService:
         fallback_llm: Optional[LLMInterface] = None,
     ) -> None:
         self._driver: Driver = GraphDatabase.driver(uri, auth=(username, password))
+        self._uri = uri
+        self._username = username
+        self._password = password
 
+        # Default (auto-select) retriever — built at startup.
         llm = _build_paid_llm(fallback_llm=fallback_llm)
         if llm is not None:
             self._retriever: Text2CypherRetriever | None = Text2CypherRetriever(
@@ -289,23 +397,122 @@ class GraphQueryService:
                 "Chat queries will return an error message."
             )
 
-    async def get_relevant_context(self, query: str, top_k: int = 5) -> str:
+        # Cache for per-backend retrievers built on demand.
+        self._external_retrievers: dict[str, Text2CypherRetriever] = {}
+
+    def _get_retriever_for_backend(
+        self, backend: str
+    ) -> "Text2CypherRetriever | None":
+        """Return (or build) the Text2CypherRetriever for *backend*.
+
+        ``backend`` is one of: ``"ollama"`` (default), ``"deepseek"``,
+        ``"openrouter"``.  Returns the default retriever for ``"ollama"`` or
+        any unknown value.
+        """
+        if backend in ("ollama", ""):
+            return self._retriever
+
+        if backend in self._external_retrievers:
+            return self._external_retrievers[backend]
+
+        # Build on first use.
+        try:
+            if backend == "deepseek":
+                from backend.config import settings as _settings
+                from backend.services.external_llm_client import DeepSeekClient
+                from backend.services.external_llm_adapters import DeepSeekLLMAdapter
+
+                if not _settings.deepseek_chat_api_key:
+                    logger.warning(
+                        "DeepSeek backend selected but DEEPSEEK_CHAT_API_KEY is not set. "
+                        "Falling back to default retriever."
+                    )
+                    return self._retriever
+                ds_client = DeepSeekClient(
+                    api_key=_settings.deepseek_chat_api_key,
+                    model=_settings.deepseek_chat_model,
+                )
+                ds_adapter = DeepSeekLLMAdapter(
+                    client=ds_client,
+                    model_name=_settings.deepseek_chat_model,
+                )
+                retriever = Text2CypherRetriever(
+                    driver=self._driver,
+                    llm=ds_adapter,
+                    neo4j_schema=_NEO4J_SCHEMA,
+                    examples=_EXAMPLES,
+                )
+
+            elif backend == "openrouter":
+                from backend.config import settings as _settings
+                from backend.services.external_llm_client import OpenRouterClient
+                from backend.services.external_llm_adapters import OpenRouterLLMAdapter
+
+                if not _settings.openrouter_api_key:
+                    logger.warning(
+                        "OpenRouter backend selected but OPENROUTER_API_KEY is not set. "
+                        "Falling back to default retriever."
+                    )
+                    return self._retriever
+                or_client = OpenRouterClient(
+                    api_key=_settings.openrouter_api_key,
+                    site_url=_settings.openrouter_site_url,
+                    site_name=_settings.openrouter_site_name,
+                )
+                or_adapter = OpenRouterLLMAdapter(
+                    client=or_client,
+                    model_name="openrouter",
+                )
+                retriever = Text2CypherRetriever(
+                    driver=self._driver,
+                    llm=or_adapter,
+                    neo4j_schema=_NEO4J_SCHEMA,
+                    examples=_EXAMPLES,
+                )
+            else:
+                return self._retriever
+
+            self._external_retrievers[backend] = retriever
+            logger.info("GraphQueryService: built Text2CypherRetriever for backend=%s.", backend)
+            return retriever
+
+        except Exception as exc:
+            logger.error(
+                "Failed to build %s Text2CypherRetriever: %s. Falling back to default.",
+                backend,
+                exc,
+            )
+            return self._retriever
+
+    async def get_relevant_context(
+        self, query: str, top_k: int = 5, backend: str = "ollama"
+    ) -> tuple[str, str | None, str | None]:
         """Return formatted Cypher-query results for a user question.
 
         Parameters
         ----------
         query:   The user's natural-language question.
         top_k:   Passed to the retriever as the result limit.
+        backend: One of ``"ollama"``, ``"deepseek"``, ``"openrouter"``.
+                 Controls which LLM is used for Cypher generation.
 
         Returns
         -------
-        str
-            Formatted context string, or a fallback message if nothing found.
+        tuple[str, str | None, str | None]
+            ``(context, generated_cypher, cypher_source)`` where:
+            - ``context`` is the formatted graph results string
+            - ``generated_cypher`` is the Cypher that was executed (or None)
+            - ``cypher_source`` is ``"text2cypher"``, ``"keyword_fallback"``,
+              or None when retrieval was unavailable
         """
-        if self._retriever is None:
+        retriever = self._get_retriever_for_backend(backend)
+
+        if retriever is None:
             return (
                 "Knowledge graph retrieval is unavailable — no LLM is configured. "
-                "Check that Ollama is running or set a paid-tier API key."
+                "Check that Ollama is running or set a paid-tier API key.",
+                None,
+                None,
             )
 
         import asyncio
@@ -313,11 +520,11 @@ class GraphQueryService:
         try:
             result = await loop.run_in_executor(
                 None,
-                lambda: self._retriever.search(query_text=query),
+                lambda: retriever.search(query_text=query),
             )
         except Exception as exc:
             exc_msg = str(exc)
-            logger.error("Text2CypherRetriever.search failed: %s", exc_msg)
+            logger.error("Text2CypherRetriever.search failed (backend=%s): %s", backend, exc_msg)
 
             # Surface a more helpful message when the LLM clearly produced
             # garbage instead of valid Cypher.
@@ -327,12 +534,76 @@ class GraphQueryService:
                     "of a Cypher query.  Consider using a larger model for "
                     "ollama_text2cypher_model (e.g. qwen3:1.7b or mistral)."
                 )
-            return "No relevant graph data found for this query."
+
+            # Attempt keyword-based fallback before giving up entirely.
+            logger.info(
+                "Text2Cypher failed — attempting keyword fallback for query: %s", query
+            )
+            fallback_context, fallback_cypher = await self._keyword_fallback(query, top_k=top_k)
+            if fallback_context:
+                logger.info("Keyword fallback succeeded.")
+                return fallback_context, fallback_cypher, "keyword_fallback"
+
+            return "No relevant graph data found for this query.", None, None
 
         if not result.items:
-            return "No relevant graph data found for this query."
+            # Text2Cypher ran but returned nothing — try keyword fallback.
+            logger.info(
+                "Text2CypherRetriever returned no items — attempting keyword fallback."
+            )
+            fallback_context, fallback_cypher = await self._keyword_fallback(query, top_k=top_k)
+            if fallback_context:
+                logger.info("Keyword fallback succeeded.")
+                return fallback_context, fallback_cypher, "keyword_fallback"
+            return "No relevant graph data found for this query.", None, None
 
-        return "\n\n---\n\n".join(item.content for item in result.items)
+        # Extract the Cypher that was actually executed.  neo4j-graphrag stores
+        # it on the retriever's last result metadata when available.
+        executed_cypher: str | None = None
+        try:
+            executed_cypher = result.metadata.get("cypher") if result.metadata else None
+        except Exception:
+            pass
+
+        context = "\n\n---\n\n".join(item.content for item in result.items)
+        return context, executed_cypher, "text2cypher"
+
+    async def _keyword_fallback(self, query: str, top_k: int = 5) -> tuple[str, str | None]:
+        """Run a direct Neo4j CONTAINS search when Text2Cypher fails or returns nothing.
+
+        Extracts keywords from *query* and searches ``p.text`` / ``p.heading``
+        on all ``Provision`` nodes.  Returns ``(formatted_results, cypher)``
+        where ``cypher`` is the query that was run, or ``("", None)`` if
+        nothing was found or no keywords could be extracted.
+        """
+        cypher = _build_fallback_cypher(query, limit=top_k)
+        if cypher is None:
+            logger.warning("Keyword fallback: no usable keywords in query '%s'.", query)
+            return "", None
+
+        logger.debug("Keyword fallback Cypher:\n%s", cypher)
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            records = await loop.run_in_executor(
+                None,
+                lambda: self._driver.execute_query(cypher).records,
+            )
+        except Exception as exc:
+            logger.error("Keyword fallback query failed: %s", exc)
+            return "", cypher
+
+        if not records:
+            return "", cypher
+
+        parts: list[str] = []
+        for rec in records:
+            path = rec.get("path", "")
+            heading = rec.get("heading", "")
+            text = rec.get("text", "")
+            parts.append(f"[{path}] {heading}\n{text}".strip())
+
+        return "\n\n---\n\n".join(parts), cypher
 
     def close(self) -> None:
         """Close the underlying Neo4j driver."""
