@@ -41,6 +41,13 @@ uploaded_file = st.file_uploader(
     help="Supported formats: PDF, DOCX, TXT",
 )
 
+index_type = st.radio(
+    "Indexing Mode",
+    options=["GraphRAG", "Standard RAG"],
+    help="Choose whether to build a Neo4j Knowledge Graph (GraphRAG) or a standard vector index (Standard RAG)."
+)
+index_type_val = "graphrag" if index_type == "GraphRAG" else "standard_rag"
+
 if uploaded_file is not None:
     filename = uploaded_file.name
 
@@ -57,7 +64,7 @@ if uploaded_file is not None:
             # Requirement 1.2 — send file to backend
             try:
                 with st.spinner("Uploading document…"):
-                    upload_result = api_client.upload_document(file_bytes, filename)
+                    upload_result = api_client.upload_document(file_bytes, filename, index_type=index_type_val)
 
                 document_id: str = upload_result["document_id"]
                 st.info(f"Document accepted. ID: `{document_id}`")

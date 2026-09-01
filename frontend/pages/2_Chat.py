@@ -40,6 +40,9 @@ if "messages" not in st.session_state:
 if "selected_backend" not in st.session_state:
     st.session_state["selected_backend"] = "ollama"
 
+if "selected_rag_mode" not in st.session_state:
+    st.session_state["selected_rag_mode"] = "graphrag"
+
 # ---------------------------------------------------------------------------
 # Sidebar controls
 # ---------------------------------------------------------------------------
@@ -73,6 +76,15 @@ with st.sidebar:
     )
     selected_backend: str = _BACKEND_OPTIONS[selected_label]
     st.session_state["selected_backend"] = selected_backend
+
+    rag_label = st.selectbox(
+        "Retrieval Mode",
+        options=["GraphRAG", "Standard RAG"],
+        index=0 if st.session_state["selected_rag_mode"] == "graphrag" else 1,
+        help="Choose whether to retrieve context from the Neo4j Knowledge Graph or the standard vector index."
+    )
+    selected_rag_mode = "graphrag" if rag_label == "GraphRAG" else "standard_rag"
+    st.session_state["selected_rag_mode"] = selected_rag_mode
 
     # Show a hint if the user picks an external backend.
     if selected_backend == "deepseek":
@@ -131,6 +143,7 @@ if query:
                     query=query,
                     history=st.session_state["messages"],
                     backend=selected_backend,
+                    rag_mode=selected_rag_mode,
                 )
 
                 assistant_response: str = result.get("response", "")

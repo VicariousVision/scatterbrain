@@ -29,6 +29,7 @@ class ChatRequest(BaseModel):
     query: str
     history: list[dict]  # [{"role": "user"|"assistant", "content": str}]
     backend: Literal["ollama", "deepseek", "openrouter"] = "ollama"
+    rag_mode: Literal["graphrag", "standard_rag"] = "graphrag"
 
 
 class ChatResponse(BaseModel):

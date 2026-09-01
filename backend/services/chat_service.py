@@ -115,6 +115,7 @@ class ChatService:
         user_query: str,
         history: List[Dict[str, str]],
         backend: str = "ollama",
+        rag_mode: str = "graphrag",
     ) -> Tuple[str, List[Dict[str, str]], Optional[str], Optional[str]]:
         """Process a chat query end-to-end.
 
@@ -140,13 +141,28 @@ class ChatService:
         logger.info("ChatService.query backend=%s query=%s", backend, user_query)
 
         # ------------------------------------------------------------------
-        # Step 1: retrieve context from the graph using the selected backend.
+        # Step 1: retrieve context from the graph or vector index
         # ------------------------------------------------------------------
-        context, generated_cypher, cypher_source = (
-            await self._graph_query_service.get_relevant_context(
-                user_query, top_k=5, backend=backend
+        if rag_mode == "standard_rag":
+            import chromadb
+            from chromadb.config import Settings
+            try:
+                client = chromadb.PersistentClient(path="./backend/chroma_db", settings=Settings(allow_reset=True))
+                collection = client.get_collection(name="scatterbrain_docs")
+                results = collection.query(query_texts=[user_query], n_results=5)
+                documents = results.get("documents", [[]])[0]
+                context = "\n\n".join(documents)
+            except Exception as exc:
+                logger.warning("Failed to query ChromaDB: %s", exc)
+                context = ""
+            generated_cypher = None
+            cypher_source = "vector_search"
+        else:
+            context, generated_cypher, cypher_source = (
+                await self._graph_query_service.get_relevant_context(
+                    user_query, top_k=5, backend=backend
+                )
             )
-        )
 
         # ------------------------------------------------------------------
         # Step 2: generate an answer using the selected backend.

@@ -1,585 +1,194 @@
 # Scatterbrain ⚖️🧠🤖
 
-Scatterbrain is a legal document intelligence platform that combines document parsing, knowledge graph extraction, and Graph-RAG-powered conversational querying.
+**Scatterbrain** is an advanced legal document intelligence and Graph-RAG platform tailored for complex regulatory frameworks, manuals (such as the SARB Currency and Exchanges Manual), and contracts. 
 
-Users can upload legal documents (`PDF`, `DOCX`, `TXT`), automatically extract entities and relationships into a Neo4j knowledge graph, and query the graph using a conversational interface backed by a locally-hosted LLM running through Ollama.
-
-The system is composed of:
-
-- A **Streamlit frontend** for document upload and chat interaction.
-- A **FastAPI backend** for document processing, entity extraction, graph storage, and LLM orchestration.
-- A **Neo4j graph database** for storing entities and relationships.
-- A **local Ollama-hosted LLM** for extraction and grounded question answering.
+It combines domain-aware hierarchical document parsing, automated knowledge graph extraction into **Neo4j**, vector indexing via **ChromaDB**, and multi-provider conversational querying with **Text2Cypher** and Graph-RAG retrieval.
 
 ---
 
-# Features
+## 🌟 Key Features
 
-## Document Upload
+- **Multi-Format Document Ingestion**:
+  - Upload and parse `.pdf` (via `pdfplumber`), `.docx` (via `python-docx`), and `.txt` documents.
+  - Background asynchronous task processing with live status tracking.
 
-- Upload `.pdf`, `.docx`, and `.txt` legal documents.
-- Background document processing workflow.
-- Upload progress and status tracking.
-- Document management dashboard.
+- **Domain-Aware Legal Chunking**:
+  - Hierarchical provision chunker designed to preserve legal hierarchy, clauses, definitions, and provision paths (e.g., `B.4(B)(iv)`).
+  - Standard recursive text chunking for vector-based workflows.
 
-## Document Parsing
+- **Dual Retrieval & Indexing Modes**:
+  - **GraphRAG (Knowledge Graph)**: Extracts entities and relationships into Neo4j. Uses `neo4j-graphrag` `Text2CypherRetriever` with automatic Cypher query sanitization and keyword fallback.
+  - **Standard RAG (Vector Search)**: Indexes chunk embeddings into ChromaDB for traditional semantic vector retrieval.
 
-- PDF text extraction.
-- DOCX paragraph and table extraction.
-- TXT ingestion.
-- Preservation of paragraph structure.
+- **Multi-Provider LLM Support**:
+  - **Ollama (Local)**: CPU/GPU-configurable local inference (e.g., `mistral` for extraction/answers and `qwen3.5:0.8b` for fast Text2Cypher).
+  - **DeepSeek**: Cloud API support (`deepseek-chat`) for high-accuracy reasoning and Cypher generation.
+  - **OpenRouter**: Free-tier model rotation (Nemotron, Gemma, etc.) with automatic failover and rate-limit recovery.
+  - **Anthropic & OpenAI**: Optional paid-tier API keys for Claude and OpenAI models.
 
-## Entity & Relationship Extraction
-
-Automatic extraction of:
-
-- Persons
-- Organizations
-- Contracts
-- Clauses
-- Dates
-- Jurisdictions
-- Obligations
-
-Relationships are extracted as directed graph edges.
-
-Example:
-
-```text
-(Alice Corp) -[SIGNED]-> (Employment Agreement)
-```
-
-## Knowledge Graph Storage
-
-- Neo4j-backed graph storage.
-- Entity deduplication using composite keys.
-- Cross-document relationship discovery.
-- Graph summaries per document.
-
-## Conversational Graph-RAG Chat
-
-- Natural language querying over uploaded legal documents.
-- Responses grounded in graph context.
-- Conversation history support.
-- Multi-hop graph retrieval.
-
-## System Health & Configuration
-
-- Environment variable configuration.
-- Health check endpoint.
-- Startup dependency verification.
+- **Streamlit Interactive UI**:
+  - **Landing Page**: Project overview and quick-start guide.
+  - **Upload Hub**: File uploader, indexing mode selector (GraphRAG vs. Standard RAG), processing progress polling, and per-document entity/relationship graph metrics.
+  - **Chat Interface**: Conversational query assistant with backend selection, retrieval mode toggle, chat history memory, and an inspectable Cypher query viewer.
 
 ---
 
-# Architecture
-
-```text
-                +----------------------+
-                |     Streamlit UI     |
-                |----------------------|
-                | Upload Page          |
-                | Chat Interface       |
-                +----------+-----------+
-                           |
-                           v
-                +----------------------+
-                |    FastAPI Backend   |
-                |----------------------|
-                | Upload API           |
-                | Parsing Engine       |
-                | Entity Extractor     |
-                | Graph-RAG Orchestrator|
-                +----------+-----------+
-                           |
-          +----------------+----------------+
-          |                                 |
-          v                                 v
-+-------------------+           +-------------------+
-|      Neo4j        |           |      Ollama       |
-| Knowledge Graph   |           | Local LLM Runtime |
-+-------------------+           +-------------------+
-```
-
----
-
-# Tech Stack
-
-## Frontend
-
-- Streamlit
-
-## Backend
-
-- FastAPI
-- Uvicorn
-
-## AI / NLP
-
-- Ollama
-- Local LLM
-
-## Database
-
-- Neo4j
-
-## Parsing Libraries
-
-- PyPDF2 / pdfplumber
-- python-docx
-
----
-
-# Project Structure
+## 🏗️ Architecture & Project Structure
 
 ```text
 scatterbrain/
-│
-├── backend/
-│   ├── api/
-│   ├── services/
-│   │   ├── parser/
-│   │   ├── extraction/
-│   │   ├── graph/
-│   │   └── rag/
-│   ├── models/
-│   ├── config/
-│   └── main.py
-│
-├── frontend/
-│   ├── pages/
-│   ├── components/
-│   └── app.py
-│
-├── requirements.txt
-├── .env
-└── README.md
+├── backend/                        # FastAPI backend application
+│   ├── models/                     # Pydantic data schemas & request/response models
+│   │   ├── chat.py                 # Chat request & response schemas
+│   │   ├── document.py             # Document records and upload models
+│   │   └── entities.py             # Extracted entity and relationship models
+│   ├── routers/                    # FastAPI route definitions
+│   │   ├── chat.py                 # /chat/query endpoint
+│   │   ├── documents.py            # /documents CRUD & graph summary endpoints
+│   │   └── health.py               # /health check endpoint
+│   ├── services/                   # Business logic and external integrations
+│   │   ├── chat_service.py         # Multi-backend chat orchestration & prompt grounding
+│   │   ├── document_parser.py      # PDF, DOCX, and TXT parsing
+│   │   ├── document_service.py     # Ingestion orchestration & concurrency control
+│   │   ├── entity_extractor.py     # Entity and relation extraction logic
+│   │   ├── external_llm_adapters.py# Adapter layer for paid LLMs
+│   │   ├── external_llm_client.py  # DeepSeek & OpenRouter async clients with model rotation
+│   │   ├── extraction_service.py   # Neo4j graph batch loader & extraction pipeline
+│   │   ├── graph_query_service.py  # Text2Cypher retriever, sanitizer & fallback search
+│   │   ├── graph_schema_service.py # Neo4j schema & constraints setup
+│   │   ├── graph_service.py        # Neo4j client connection and graph metrics
+│   │   ├── ollama_adapters.py      # LangChain / neo4j-graphrag Ollama LLM adapter
+│   │   ├── ollama_client.py        # Async client for Ollama generation & health checks
+│   │   ├── provision_chunker.py    # Legal document provision boundary parser
+│   │   └── text_chunker.py         # Standard text chunker
+│   ├── tests/                      # Unit, integration, and property-based tests (Hypothesis)
+│   ├── config.py                   # Pydantic Settings (.env configuration)
+│   ├── main.py                     # FastAPI application lifespan & entry point
+│   └── requirements.txt            # Backend Python dependencies
+├── frontend/                       # Streamlit web application
+│   ├── pages/                      # Multi-page views
+│   │   ├── 1_Upload.py             # Document upload, status polling & graph summary
+│   │   └── 2_Chat.py               # Conversational Chat UI with backend & RAG selectors
+│   ├── tests/                      # Frontend client tests
+│   ├── api_client.py               # HTTP client communicating with FastAPI backend
+│   ├── app.py                      # Main Streamlit landing page
+│   └── requirements.txt            # Frontend Python dependencies
+├── .env.example                    # Environment variable configuration template
+├── pytest.ini                      # Pytest test markers and configuration
+├── test_graphrag_smoketest.py      # End-to-end GraphRAG pipeline smoke test
+└── README.md                       # Project documentation
 ```
 
 ---
 
-# Functional Requirements
+## ⚙️ Configuration & Environment Variables
 
-# 1. Document Upload
-
-Users can upload:
-
-- `.pdf`
-- `.docx`
-- `.txt`
-
-documents through the web interface.
-
-## Upload Workflow
-
-1. User uploads file from Streamlit frontend.
-2. Frontend sends multipart request to:
-   - `POST /documents/upload`
-3. Backend returns:
-   - `202 Accepted`
-   - `document_id`
-4. Processing begins asynchronously.
-5. Frontend displays processing status.
-6. Final status becomes:
-   - `completed`
-   - or `failed`
-
----
-
-# 2. Document Parsing
-
-The parser extracts raw UTF-8 text from uploaded documents.
-
-## Supported Formats
-
-| Format | Extraction Behavior |
-|---|---|
-| PDF | Extract all text |
-| DOCX | Extract paragraphs and tables |
-| TXT | Read raw UTF-8 text |
-
-## Parsing Rules
-
-- Preserve paragraph boundaries.
-- Raise descriptive parsing exceptions on corrupted files.
-
----
-
-# 3. Entity & Relationship Extraction
-
-The Entity Extractor sends document text to the Ollama-hosted LLM with a structured extraction prompt.
-
-## Extracted Entity Types
-
-- Person
-- Organization
-- Contract
-- Clause
-- Date
-- Jurisdiction
-- Obligation
-
-## Relationship Format
-
-Each relationship includes:
-
-```json
-{
-  "source_entity": "Party A",
-  "relationship_type": "SIGNED",
-  "target_entity": "Contract B"
-}
-```
-
-## Reliability Rules
-
-- LLM responses must be valid JSON.
-- Retry extraction up to 2 additional times if parsing fails.
-- Associate all extracted objects with the source `document_id`.
-
----
-
-# 4. Knowledge Graph Storage
-
-Entities and relationships are stored in Neo4j.
-
-## Node Schema
-
-```json
-{
-  "id": "uuid",
-  "name": "Alice Corp",
-  "type": "Organization",
-  "document_id": "doc_123"
-}
-```
-
-## Relationship Schema
-
-```json
-{
-  "type": "SIGNED",
-  "document_id": "doc_123"
-}
-```
-
-## Graph Rules
-
-- Merge duplicate entities using:
-  - `name`
-  - `type`
-- Enforce uniqueness constraints.
-- Replace old graph data when re-uploading documents with the same filename.
-
----
-
-# 5. Chat Interface
-
-Users can query uploaded legal documents using natural language.
-
-## Chat Workflow
-
-1. User submits query.
-2. Frontend sends:
-   - query
-   - chat history
-3. Backend retrieves relevant graph context.
-4. Backend builds Graph-RAG prompt.
-5. Ollama LLM generates grounded response.
-6. Frontend displays updated conversation.
-
----
-
-# 6. Graph-RAG Query Grounding
-
-The LLM must answer only using graph-derived context.
-
-## Retrieval Rules
-
-- Retrieve graph nodes within 2 hops of matching entities.
-- Format context as triples:
-
-```text
-(Entity A) -[RELATIONSHIP]-> (Entity B)
-```
-
-## Hallucination Prevention
-
-The system prompt explicitly instructs the LLM to:
-
-- Use only provided graph context.
-- Avoid fabricating information.
-
-## Missing Context Handling
-
-If no graph data exists:
-
-- Backend informs the LLM.
-- LLM informs the user no relevant data was found.
-
----
-
-# 7. Document Management
-
-The frontend displays uploaded documents with:
-
-- filename
-- upload timestamp
-- processing status
-
-## API Endpoints
-
-### Get Documents
-
-```http
-GET /documents
-```
-
-### Get Graph Summary
-
-```http
-GET /documents/{document_id}/graph-summary
-```
-
-### Example Response
-
-```json
-{
-  "nodes": 45,
-  "edges": 67
-}
-```
-
----
-
-# 8. System Configuration & Health
-
-## Environment Variables
-
-```env
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USERNAME=neo4j
-NEO4J_PASSWORD=password
-
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3
-
-BACKEND_URL=http://localhost:8000
-```
-
----
-
-# API Endpoints
-
-## Health Check
-
-```http
-GET /health
-```
-
-### Response
-
-```json
-{
-  "status": "ok"
-}
-```
-
----
-
-## Upload Document
-
-```http
-POST /documents/upload
-```
-
----
-
-## List Documents
-
-```http
-GET /documents
-```
-
----
-
-## Graph Summary
-
-```http
-GET /documents/{document_id}/graph-summary
-```
-
----
-
-## Chat Query
-
-```http
-POST /chat/query
-```
-
-### Example Request
-
-```json
-{
-  "query": "Who signed the employment agreement?",
-  "history": []
-}
-```
-
-### Example Response
-
-```json
-{
-  "response": "Alice Corp signed the Employment Agreement.",
-  "history": []
-}
-```
-
----
-
-# Installation
-
-# 1. Clone Repository
+Copy `.env.example` to create your local `.env` file:
 
 ```bash
-git clone https://github.com/your-org/scatterbrain.git
-cd scatterbrain
+cp .env.example .env
 ```
+
+Key configuration options:
+
+| Variable | Description | Default |
+| :--- | :--- | :--- |
+| `NEO4J_URI` | Neo4j Bolt connection URI | `neo4j://127.0.0.1:7687` |
+| `NEO4J_USERNAME` | Neo4j database user | `neo4j` |
+| `NEO4J_PASSWORD` | Neo4j database password | *required* |
+| `OLLAMA_BASE_URL` | Ollama service base URL | `http://localhost:11434` |
+| `OLLAMA_MODEL` | Default Ollama model for extraction & chat | `qwen3.5:0.8b` / `mistral` |
+| `OLLAMA_TEXT2CYPHER_MODEL` | Local model for Text2Cypher query generation | `qwen3.5:0.8b` |
+| `OLLAMA_NUM_GPU` | GPU layers offloaded (0 for CPU-only) | `0` |
+| `OLLAMA_MAX_PARALLEL` | Concurrent Ollama requests during ingestion | `4` |
+| `DEEPSEEK_CHAT_API_KEY` | DeepSeek API Key (for DeepSeek backend option) | *optional* |
+| `DEEPSEEK_CHAT_MODEL` | Model name for DeepSeek | `deepseek-chat` |
+| `OPENROUTER_API_KEY` | OpenRouter API Key (for OpenRouter backend option) | *optional* |
+| `ANTHROPIC_API_KEY` | Anthropic Claude key (for legacy auto-select Cypher) | *optional* |
+| `OPENAI_API_KEY` | OpenAI key (for legacy auto-select Cypher) | *optional* |
+| `BACKEND_URL` | Backend URL used by the Streamlit frontend | `http://localhost:8000` |
 
 ---
 
-# 2. Create Virtual Environment
+## 🚀 Quick Start
 
+### 1. Prerequisites
+- **Python 3.10+**
+- **Neo4j 5.x** running locally or via Docker
+- **Ollama** running locally (if using local models):
+  ```bash
+  ollama pull qwen3.5:0.8b
+  ollama pull mistral
+  ollama serve
+  ```
+
+### 2. Backend Setup
 ```bash
+# Navigate to backend directory
+cd backend
+
+# Create and activate virtual environment
 python -m venv venv
-```
-
-## Windows
-
-```bash
+# On Windows:
 venv\Scripts\activate
-```
+# On Linux / macOS:
+# source venv/bin/activate
 
-## Linux / macOS
-
-```bash
-source venv/bin/activate
-```
-
----
-
-# 3. Install Dependencies
-
-```bash
+# Install dependencies
 pip install -r requirements.txt
+
+# Start FastAPI server
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
+*API documentation is interactively available at [http://localhost:8000/docs](http://localhost:8000/docs).*
 
----
+### 3. Frontend Setup
+In a new terminal:
+```bash
+# Navigate to frontend directory
+cd frontend
 
-# 4. Configure Environment Variables
+# Create and activate virtual environment
+python -m venv venv
+# On Windows:
+venv\Scripts\activate
+# On Linux / macOS:
+# source venv/bin/activate
 
-Create a `.env` file:
+# Install dependencies
+pip install -r requirements.txt
 
-```env
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USERNAME=neo4j
-NEO4J_PASSWORD=password
-
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3
-
-BACKEND_URL=http://localhost:8000
+# Run Streamlit app
+streamlit run app.py
 ```
+*Access the UI at [http://localhost:8501](http://localhost:8501).*
 
 ---
 
-# 5. Start Neo4j
+## 🧪 Testing & Verification
 
-Ensure Neo4j is running locally.
-
----
-
-# 6. Start Ollama
-
-Example:
+Run tests from the root or backend directory:
 
 ```bash
-ollama run llama3
+# Run all backend unit and property tests
+pytest backend/tests
+
+# Run frontend tests
+pytest frontend/tests
+
+# Run GraphRAG end-to-end smoke test
+python test_graphrag_smoketest.py
 ```
 
 ---
 
-# 7. Start Backend
+## 📡 API Endpoints Overview
 
-```bash
-uvicorn backend.main:app --reload
-```
-
----
-
-# 8. Start Frontend
-
-```bash
-streamlit run frontend/app.py
-```
-
----
-
-# Error Handling
-
-## Upload Errors
-
-- Unsupported file types rejected by frontend.
-- Corrupted files raise parsing exceptions.
-
-## Extraction Errors
-
-- Malformed LLM responses trigger retries.
-- Failed extractions update document status to `failed`.
-
-## Chat Errors
-
-- Backend errors displayed without clearing chat history.
-
----
-
-# Non-Functional Considerations
-
-## Scalability
-
-- Async backend processing.
-- Graph-based retrieval efficiency.
-
-## Reliability
-
-- Retry mechanisms for extraction.
-- Dependency health verification at startup.
-
-## Security
-
-- Local-only LLM processing.
-- No external document transmission required.
-
----
-
-# Future Enhancements
-
-- Authentication & user accounts.
-- Multi-user graph isolation.
-- Streaming chat responses.
-- Vector embeddings hybrid retrieval.
-- Advanced legal ontology support.
-- Graph visualization UI.
-- Citation tracing for answers.
-- Document versioning.
-
----
-
-# License
-
-MIT License
-
----
-
-# Authors
-
-Ozzey Padayachee
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/health` | Health check for backend and service connectivity |
+| `POST` | `/documents/upload` | Upload a document (`pdf`, `docx`, `txt`) with index type (`graphrag` or `standard_rag`) |
+| `GET` | `/documents` | List all tracked documents and processing status |
+| `GET` | `/documents/{document_id}` | Get status and metadata for a specific document |
+| `GET` | `/documents/{document_id}/graph-summary` | Retrieve node and edge count metrics from Neo4j |
+| `POST` | `/chat/query` | Send natural language query with chat history, backend choice, and RAG mode |
