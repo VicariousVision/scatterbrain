@@ -182,13 +182,175 @@ python test_graphrag_smoketest.py
 
 ---
 
-## 📡 API Endpoints Overview
+## 📡 API Reference & Documentation
 
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/health` | Health check for backend and service connectivity |
-| `POST` | `/documents/upload` | Upload a document (`pdf`, `docx`, `txt`) with index type (`graphrag` or `standard_rag`) |
-| `GET` | `/documents` | List all tracked documents and processing status |
-| `GET` | `/documents/{document_id}` | Get status and metadata for a specific document |
-| `GET` | `/documents/{document_id}/graph-summary` | Retrieve node and edge count metrics from Neo4j |
-| `POST` | `/chat/query` | Send natural language query with chat history, backend choice, and RAG mode |
+Interactive API documentation and schema explorers are automatically hosted by FastAPI:
+- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+
+---
+
+### 1. Health Check
+Check backend liveness and service initialization.
+
+- **Endpoint**: `GET /health`
+- **Response**: `200 OK`
+```json
+{
+  "status": "ok"
+}
+```
+
+```bash
+curl -X GET http://localhost:8000/health
+```
+
+---
+
+### 2. Upload Document
+Upload a `.pdf`, `.docx`, or `.txt` legal document and initiate background parsing and indexing.
+
+- **Endpoint**: `POST /documents/upload`
+- **Content-Type**: `multipart/form-data`
+- **Parameters**:
+  - `file` (*required*): File binary to upload.
+  - `index_type` (*optional*): Indexing strategy — `"graphrag"` (default) or `"standard_rag"`.
+- **Response**: `202 Accepted`
+```json
+{
+  "document_id": "8f3b1479-d5c4-4b52-9b2d-c2bb475654ee"
+}
+```
+
+```bash
+curl -X POST http://localhost:8000/documents/upload \
+  -F "file=@/path/to/sarb_manual.pdf" \
+  -F "index_type=graphrag"
+```
+
+---
+
+### 3. List Documents
+Retrieve all tracked documents with their current ingestion states.
+
+- **Endpoint**: `GET /documents`
+- **Response**: `200 OK`
+```json
+[
+  {
+    "document_id": "8f3b1479-d5c4-4b52-9b2d-c2bb475654ee",
+    "filename": "sarb_manual.pdf",
+    "uploaded_at": "2026-09-01T12:00:00Z",
+    "status": "completed",
+    "error": null
+  }
+]
+```
+*Possible `status` values: `"processing"`, `"completed"`, `"failed"`.*
+
+```bash
+curl -X GET http://localhost:8000/documents
+```
+
+---
+
+### 4. Get Document Details
+Retrieve the status and metadata for a specific document by its ID.
+
+- **Endpoint**: `GET /documents/{document_id}`
+- **Response**: `200 OK`
+```json
+{
+  "document_id": "8f3b1479-d5c4-4b52-9b2d-c2bb475654ee",
+  "filename": "sarb_manual.pdf",
+  "uploaded_at": "2026-09-01T12:00:00Z",
+  "status": "completed",
+  "error": null
+}
+```
+- **Errors**:
+  - `404 Not Found`: If `document_id` is invalid or not found.
+
+```bash
+curl -X GET http://localhost:8000/documents/8f3b1479-d5c4-4b52-9b2d-c2bb475654ee
+```
+
+---
+
+### 5. Get Graph Summary
+Retrieve the total number of Neo4j entities (nodes) and relationships (edges) extracted for a processed document.
+
+- **Endpoint**: `GET /documents/{document_id}/graph-summary`
+- **Response**: `200 OK`
+```json
+{
+  "node_count": 284,
+  "edge_count": 512
+}
+```
+- **Errors**:
+  - `404 Not Found`: If document does not exist.
+  - `503 Service Unavailable`: If Neo4j database is unreachable.
+
+```bash
+curl -X GET http://localhost:8000/documents/8f3b1479-d5c4-4b52-9b2d-c2bb475654ee/graph-summary
+```
+
+---
+
+### 6. Conversational Chat Query
+Query the legal knowledge base with conversational history, choice of LLM backend, and retrieval strategy.
+
+- **Endpoint**: `POST /chat/query`
+- **Content-Type**: `application/json`
+- **Request Body**:
+```json
+{
+  "query": "What are the travel allowance limits for South African residents?",
+  "history": [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hello! How can I assist with the legal manual?"}
+  ],
+  "backend": "ollama",
+  "rag_mode": "graphrag"
+}
+```
+
+| Field | Type | Options / Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `query` | `string` | Required | User's question |
+| `history` | `list[dict]` | `[{"role": "user"\|"assistant", "content": "..."}]` | Chat history (backend automatically trims to last 10 messages) |
+| `backend` | `string` | `"ollama"`, `"deepseek"`, `"openrouter"` (default: `"ollama"`) | Target LLM provider for Cypher & answer synthesis |
+| `rag_mode` | `string` | `"graphrag"`, `"standard_rag"` (default: `"graphrag"`) | Knowledge Graph Cypher retrieval vs. ChromaDB vector search |
+
+- **Response**: `200 OK`
+```json
+{
+  "response": "Under Section B.4(A), the single discretionary allowance for South African residents is R1,000,000 per calendar year...",
+  "history": [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hello! How can I assist with the legal manual?"},
+    {"role": "user", "content": "What are the travel allowance limits for South African residents?"},
+    {"role": "assistant", "content": "Under Section B.4(A), the single discretionary allowance for South African residents is R1,000,000 per calendar year..."}
+  ],
+  "backend": "ollama",
+  "generated_cypher": "MATCH (p:Provision) WHERE p.path STARTS WITH 'B.4' RETURN p.path, p.text",
+  "cypher_source": "text2cypher"
+}
+```
+
+- **Errors**:
+  - `400 Bad Request`: If selected external backend is missing its required `.env` API key.
+  - `401 Unauthorized`: If the external API key is invalid.
+  - `503 Service Unavailable`: If Ollama or cloud providers are unreachable or rate-limited.
+
+```bash
+curl -X POST http://localhost:8000/chat/query \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What are the travel allowance limits for South African residents?",
+    "history": [],
+    "backend": "ollama",
+    "rag_mode": "graphrag"
+  }'
+```
