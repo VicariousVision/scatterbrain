@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import List
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
 from backend.models.document import (
     DocumentListItem,
@@ -99,6 +99,7 @@ def _require_graph_service() -> GraphService:
 )
 async def upload_document(
     file: UploadFile = File(...),
+    index_type: str = Form("graphrag"),
 ) -> UploadResponse:
     """Accept a multipart file upload and start background processing.
 
@@ -111,6 +112,7 @@ async def upload_document(
     record = await svc.upload(
         filename=file.filename or "unknown",
         content=content,
+        index_type=index_type,
     )
     logger.info("Upload accepted: document_id=%s", record.document_id)
     return UploadResponse(document_id=record.document_id)

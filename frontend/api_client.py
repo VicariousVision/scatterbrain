@@ -43,7 +43,7 @@ def validate_file_type(filename: str) -> bool:
     return ext in SUPPORTED_EXTENSIONS
 
 
-def upload_document(file_bytes: bytes, filename: str) -> dict:
+def upload_document(file_bytes: bytes, filename: str, index_type: str = "graphrag") -> dict:
     """Upload a document to the backend for processing.
 
     Sends a multipart/form-data POST request to ``/documents/upload``.
@@ -69,6 +69,7 @@ def upload_document(file_bytes: bytes, filename: str) -> dict:
         response = client.post(
             f"{BACKEND_URL}/documents/upload",
             files={"file": (filename, file_bytes, "application/octet-stream")},
+            data={"index_type": index_type},
         )
         response.raise_for_status()
         return response.json()
@@ -147,7 +148,7 @@ def get_graph_summary(document_id: str) -> dict:
         return response.json()
 
 
-def chat_query(query: str, history: list, backend: str = "ollama") -> dict:
+def chat_query(query: str, history: list, backend: str = "ollama", rag_mode: str = "graphrag") -> dict:
     """Submit a chat query to the backend and return the LLM response.
 
     Sends a POST request to ``/chat/query`` with a 180-second timeout
@@ -178,7 +179,7 @@ def chat_query(query: str, history: list, backend: str = "ollama") -> dict:
     with httpx.Client(timeout=180.0) as client:
         response = client.post(
             f"{BACKEND_URL}/chat/query",
-            json={"query": query, "history": history, "backend": backend},
+            json={"query": query, "history": history, "backend": backend, "rag_mode": rag_mode},
         )
         response.raise_for_status()
         return response.json()

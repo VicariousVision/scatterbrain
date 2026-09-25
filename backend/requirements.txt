@@ -10,3 +10,4 @@ python-docx==1.1.2
 hypothesis
 neo4j-graphrag[ollama]==1.18.0
 langchain-text-splitters==0.3.11
+chromadb==0.5.0

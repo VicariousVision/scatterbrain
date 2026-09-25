@@ -76,7 +76,7 @@ class DocumentService:
     # Public API
     # ------------------------------------------------------------------
 
-    async def upload(self, filename: str, content: bytes) -> DocumentRecord:
+    async def upload(self, filename: str, content: bytes, index_type: str = "graphrag") -> DocumentRecord:
         """Accept an uploaded file, create a tracking record, and start processing."""
         document_id = str(uuid.uuid4())
         record = DocumentRecord(
@@ -86,10 +86,10 @@ class DocumentService:
             status="processing",
         )
         self._store[document_id] = record
-        logger.info("Document uploaded: document_id=%s filename=%s", document_id, filename)
+        logger.info("Document uploaded: document_id=%s filename=%s index_type=%s", document_id, filename, index_type)
 
         asyncio.create_task(
-            self._process_document(document_id, filename, content),
+            self._process_document(document_id, filename, content, index_type),
             name=f"process-{document_id}",
         )
         return record
@@ -107,10 +107,10 @@ class DocumentService:
     # ------------------------------------------------------------------
 
     async def _process_document(
-        self, document_id: str, filename: str, content: bytes
+        self, document_id: str, filename: str, content: bytes, index_type: str
     ) -> None:
         """Run the full ingestion pipeline for an uploaded document."""
-        logger.info("Starting ingestion pipeline for document_id=%s", document_id)
+        logger.info("Starting ingestion pipeline for document_id=%s type=%s", document_id, index_type)
         try:
             # Step 1: Parse raw text.
             text = parse_document(filename, content)
@@ -118,12 +118,16 @@ class DocumentService:
                 "Parsed document_id=%s: %d characters.", document_id, len(text)
             )
 
-            # Step 2: Delete stale graph data for the same filename.
-            await self._delete_stale_graph_data(filename, document_id)
-
-            # Step 3–5: Chunk → extract → load.
-            async with self._processing_semaphore:
-                await self._run_ingestion_pipeline(text, document_id, filename)
+            if index_type == "standard_rag":
+                async with self._processing_semaphore:
+                    await self._run_standard_rag_pipeline(text, document_id, filename)
+            else:
+                # Step 2: Delete stale graph data for the same filename.
+                await self._delete_stale_graph_data(filename, document_id)
+    
+                # Step 3–5: Chunk → extract → load.
+                async with self._processing_semaphore:
+                    await self._run_ingestion_pipeline(text, document_id, filename)
 
             self._update_status(document_id, "completed")
             logger.info("Ingestion completed for document_id=%s", document_id)
@@ -137,6 +141,32 @@ class DocumentService:
                 exc_info=True,
             )
             self._update_status(document_id, "failed", error=error_message)
+
+    async def _run_standard_rag_pipeline(self, text: str, document_id: str, filename: str) -> None:
+        import chromadb
+        from chromadb.config import Settings
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        
+        logger.info("Running standard RAG pipeline for %s", document_id)
+        
+        # Initialize vector store
+        client = chromadb.PersistentClient(path="./backend/chroma_db", settings=Settings(allow_reset=True))
+        collection = client.get_or_create_collection(name="scatterbrain_docs")
+        
+        # Delete existing chunks for this filename to prevent duplicates
+        collection.delete(where={"filename": filename})
+        
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        chunks = splitter.split_text(text)
+        
+        if not chunks:
+            raise RuntimeError("No chunks produced from document.")
+            
+        ids = [f"{document_id}_{i}" for i in range(len(chunks))]
+        metadatas = [{"document_id": document_id, "filename": filename} for _ in chunks]
+        
+        collection.add(documents=chunks, ids=ids, metadatas=metadatas)
+        logger.info("Indexed %d chunks into ChromaDB for %s", len(chunks), filename)
 
     async def _run_ingestion_pipeline(
         self, text: str, document_id: str, filename: str

@@ -83,6 +83,7 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
             user_query=request.query,
             history=request.history,
             backend=request.backend,
+            rag_mode=request.rag_mode,
         )
     except OllamaClientError as exc:
         logger.error("Ollama unavailable during chat query: %s", exc)
