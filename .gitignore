@@ -219,3 +219,5 @@ __marimo__/
 # Kiro files
 .kiro
 .hypothesis
+
+.idea
