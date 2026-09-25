@@ -221,3 +221,18 @@ __marimo__/
 .hypothesis
 
 .idea
+
+/chroma_db
+backend/chroma_db/chroma.sqlite3
+backend/chroma_db/6173b359-88e7-4ce5-9fbb-6d266e8ab30a/data_level0.bin
+backend/chroma_db/6173b359-88e7-4ce5-9fbb-6d266e8ab30a/header.bin
+backend/chroma_db/6173b359-88e7-4ce5-9fbb-6d266e8ab30a/length.bin
+backend/chroma_db/6173b359-88e7-4ce5-9fbb-6d266e8ab30a/link_lists.bin
+backend/chroma_db/cba03e55-9d04-4465-982b-98b2e12af360/data_level0.bin
+backend/chroma_db/cba03e55-9d04-4465-982b-98b2e12af360/header.bin
+backend/chroma_db/cba03e55-9d04-4465-982b-98b2e12af360/length.bin
+backend/chroma_db/cba03e55-9d04-4465-982b-98b2e12af360/link_lists.bin
+backend/chroma_db/f2554f9a-9e17-4bd7-bdb8-1886ca0d51f5/data_level0.bin
+backend/chroma_db/f2554f9a-9e17-4bd7-bdb8-1886ca0d51f5/header.bin
+backend/chroma_db/f2554f9a-9e17-4bd7-bdb8-1886ca0d51f5/length.bin
+backend/chroma_db/f2554f9a-9e17-4bd7-bdb8-1886ca0d51f5/link_lists.bin

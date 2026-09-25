@@ -47,6 +47,20 @@ QUESTION:
 
 ANSWER:"""
 
+_RAG_PROMPT = """\
+You are a helpful document assistant. Answer the user's question using the \
+provided context from the uploaded documents. If the context is empty or \
+doesn't contain relevant information, respond conversationally and let the \
+user know they should ask something related to their uploaded documents.
+
+CONTEXT:
+{context}
+
+QUESTION:
+{query}
+
+ANSWER:"""
+
 
 class ChatService:
     """Orchestrates context retrieval and LLM answer generation.
@@ -145,9 +159,8 @@ class ChatService:
         # ------------------------------------------------------------------
         if rag_mode == "standard_rag":
             import chromadb
-            from chromadb.config import Settings
             try:
-                client = chromadb.PersistentClient(path="./backend/chroma_db", settings=Settings(allow_reset=True))
+                client = chromadb.PersistentClient(path="./backend/chroma_db")
                 collection = client.get_collection(name="scatterbrain_docs")
                 results = collection.query(query_texts=[user_query], n_results=5)
                 documents = results.get("documents", [[]])[0]
@@ -184,8 +197,11 @@ class ChatService:
             )
 
         else:
-            # Default: local Ollama (Mistral 7B).
-            prompt = _LEGAL_PROMPT.format(context=context, query=user_query)
+            # Default: local Ollama.
+            # Use the domain-locked legal prompt for GraphRAG, and a general
+            # conversational prompt for Standard RAG.
+            template = _RAG_PROMPT if rag_mode == "standard_rag" else _LEGAL_PROMPT
+            prompt = template.format(context=context, query=user_query)
             try:
                 response_text = await self._llm._client.generate(prompt)
             except OllamaClientError as exc:

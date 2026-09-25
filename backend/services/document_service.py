@@ -144,13 +144,12 @@ class DocumentService:
 
     async def _run_standard_rag_pipeline(self, text: str, document_id: str, filename: str) -> None:
         import chromadb
-        from chromadb.config import Settings
         from langchain_text_splitters import RecursiveCharacterTextSplitter
-        
+
         logger.info("Running standard RAG pipeline for %s", document_id)
-        
-        # Initialize vector store
-        client = chromadb.PersistentClient(path="./backend/chroma_db", settings=Settings(allow_reset=True))
+
+        # Initialize vector store (chromadb 1.x — no Settings import needed)
+        client = chromadb.PersistentClient(path="./backend/chroma_db")
         collection = client.get_or_create_collection(name="scatterbrain_docs")
         
         # Delete existing chunks for this filename to prevent duplicates
