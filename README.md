@@ -1,356 +1,245 @@
-# Scatterbrain ⚖️🧠🤖
+# Scatterbrain RAG
 
-**Scatterbrain** is an advanced legal document intelligence and Graph-RAG platform tailored for complex regulatory frameworks, manuals (such as the SARB Currency and Exchanges Manual), and contracts. 
+A clean, working document intelligence system using Retrieval-Augmented Generation (RAG). Upload PDF/TXT documents, and query them using natural language with LLM-powered responses grounded in your document content.
 
-It combines domain-aware hierarchical document parsing, automated knowledge graph extraction into **Neo4j**, vector indexing via **ChromaDB**, and multi-provider conversational querying with **Text2Cypher** and Graph-RAG retrieval.
+## Architecture
 
----
+**Complete RAG Pipeline:**
+1. **Document Upload** → Parse (PDF/TXT) → Chunk (LangChain) → Embed (Ollama) → Store (ChromaDB)
+2. **Query** → Embed query → Search vector DB → Retrieve top-k chunks → Generate answer with LLM
 
-## 🌟 Key Features
+**Tech Stack:**
+- **Backend:** FastAPI, Python 3.11+
+- **LLM & Embeddings:** Ollama (local inference)
+- **Vector Store:** ChromaDB (persistent)
+- **Document DB:** SQLite
+- **Text Processing:** LangChain text splitters, pdfplumber
+- **Frontend:** Streamlit
 
-- **Multi-Format Document Ingestion**:
-  - Upload and parse `.pdf` (via `pdfplumber`), `.docx` (via `python-docx`), and `.txt` documents.
-  - Background asynchronous task processing with live status tracking.
+## Prerequisites
 
-- **Domain-Aware Legal Chunking**:
-  - Hierarchical provision chunker designed to preserve legal hierarchy, clauses, definitions, and provision paths (e.g., `B.4(B)(iv)`).
-  - Standard recursive text chunking for vector-based workflows.
+1. **Python 3.11+**
+2. **Ollama** - Install from [ollama.ai](https://ollama.ai/)
 
-- **Dual Retrieval & Indexing Modes**:
-  - **GraphRAG (Knowledge Graph)**: Extracts entities and relationships into Neo4j. Uses `neo4j-graphrag` `Text2CypherRetriever` with automatic Cypher query sanitization and keyword fallback.
-  - **Standard RAG (Vector Search)**: Indexes chunk embeddings into ChromaDB for traditional semantic vector retrieval.
+## Setup
 
-- **Multi-Provider LLM Support**:
-  - **Ollama (Local)**: CPU/GPU-configurable local inference (e.g., `mistral` for extraction/answers and `qwen3.5:0.8b` for fast Text2Cypher).
-  - **DeepSeek**: Cloud API support (`deepseek-chat`) for high-accuracy reasoning and Cypher generation.
-  - **OpenRouter**: Free-tier model rotation (Nemotron, Gemma, etc.) with automatic failover and rate-limit recovery.
-  - **Anthropic & OpenAI**: Optional paid-tier API keys for Claude and OpenAI models.
+### 1. Install Ollama Models
 
-- **Streamlit Interactive UI**:
-  - **Landing Page**: Project overview and quick-start guide.
-  - **Upload Hub**: File uploader, indexing mode selector (GraphRAG vs. Standard RAG), processing progress polling, and per-document entity/relationship graph metrics.
-  - **Chat Interface**: Conversational query assistant with backend selection, retrieval mode toggle, chat history memory, and an inspectable Cypher query viewer.
+```powershell
+# Pull the LLM for generation (qwen3.5:0.8b is fast and lightweight)
+ollama pull qwen3.5:0.8b
 
----
+# Pull the embedding model
+ollama pull nomic-embed-text
 
-## 🏗️ Architecture & Project Structure
-
-```text
-scatterbrain/
-├── backend/                        # FastAPI backend application
-│   ├── models/                     # Pydantic data schemas & request/response models
-│   │   ├── chat.py                 # Chat request & response schemas
-│   │   ├── document.py             # Document records and upload models
-│   │   └── entities.py             # Extracted entity and relationship models
-│   ├── routers/                    # FastAPI route definitions
-│   │   ├── chat.py                 # /chat/query endpoint
-│   │   ├── documents.py            # /documents CRUD & graph summary endpoints
-│   │   └── health.py               # /health check endpoint
-│   ├── services/                   # Business logic and external integrations
-│   │   ├── chat_service.py         # Multi-backend chat orchestration & prompt grounding
-│   │   ├── document_parser.py      # PDF, DOCX, and TXT parsing
-│   │   ├── document_service.py     # Ingestion orchestration & concurrency control
-│   │   ├── entity_extractor.py     # Entity and relation extraction logic
-│   │   ├── external_llm_adapters.py# Adapter layer for paid LLMs
-│   │   ├── external_llm_client.py  # DeepSeek & OpenRouter async clients with model rotation
-│   │   ├── extraction_service.py   # Neo4j graph batch loader & extraction pipeline
-│   │   ├── graph_query_service.py  # Text2Cypher retriever, sanitizer & fallback search
-│   │   ├── graph_schema_service.py # Neo4j schema & constraints setup
-│   │   ├── graph_service.py        # Neo4j client connection and graph metrics
-│   │   ├── ollama_adapters.py      # LangChain / neo4j-graphrag Ollama LLM adapter
-│   │   ├── ollama_client.py        # Async client for Ollama generation & health checks
-│   │   ├── provision_chunker.py    # Legal document provision boundary parser
-│   │   └── text_chunker.py         # Standard text chunker
-│   ├── tests/                      # Unit, integration, and property-based tests (Hypothesis)
-│   ├── config.py                   # Pydantic Settings (.env configuration)
-│   ├── main.py                     # FastAPI application lifespan & entry point
-│   └── requirements.txt            # Backend Python dependencies
-├── frontend/                       # Streamlit web application
-│   ├── pages/                      # Multi-page views
-│   │   ├── 1_Upload.py             # Document upload, status polling & graph summary
-│   │   └── 2_Chat.py               # Conversational Chat UI with backend & RAG selectors
-│   ├── tests/                      # Frontend client tests
-│   ├── api_client.py               # HTTP client communicating with FastAPI backend
-│   ├── app.py                      # Main Streamlit landing page
-│   └── requirements.txt            # Frontend Python dependencies
-├── .env.example                    # Environment variable configuration template
-├── pytest.ini                      # Pytest test markers and configuration
-├── test_graphrag_smoketest.py      # End-to-end GraphRAG pipeline smoke test
-└── README.md                       # Project documentation
+# Start Ollama server
+ollama serve
 ```
 
----
+### 2. Configure Environment
 
-## ⚙️ Configuration & Environment Variables
+Copy `.env.example` to `.env`:
 
-Copy `.env.example` to create your local `.env` file:
-
-```bash
+```powershell
 cp .env.example .env
 ```
 
-Key configuration options:
+The defaults should work for local Ollama. Adjust if needed:
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `NEO4J_URI` | Neo4j Bolt connection URI | `neo4j://127.0.0.1:7687` |
-| `NEO4J_USERNAME` | Neo4j database user | `neo4j` |
-| `NEO4J_PASSWORD` | Neo4j database password | *required* |
-| `OLLAMA_BASE_URL` | Ollama service base URL | `http://localhost:11434` |
-| `OLLAMA_MODEL` | Default Ollama model for extraction & chat | `qwen3.5:0.8b` / `mistral` |
-| `OLLAMA_TEXT2CYPHER_MODEL` | Local model for Text2Cypher query generation | `qwen3.5:0.8b` |
-| `OLLAMA_NUM_GPU` | GPU layers offloaded (0 for CPU-only) | `0` |
-| `OLLAMA_MAX_PARALLEL` | Concurrent Ollama requests during ingestion | `4` |
-| `DEEPSEEK_CHAT_API_KEY` | DeepSeek API Key (for DeepSeek backend option) | *optional* |
-| `DEEPSEEK_CHAT_MODEL` | Model name for DeepSeek | `deepseek-chat` |
-| `OPENROUTER_API_KEY` | OpenRouter API Key (for OpenRouter backend option) | *optional* |
-| `ANTHROPIC_API_KEY` | Anthropic Claude key (for legacy auto-select Cypher) | *optional* |
-| `OPENAI_API_KEY` | OpenAI key (for legacy auto-select Cypher) | *optional* |
-| `BACKEND_URL` | Backend URL used by the Streamlit frontend | `http://localhost:8000` |
-
----
-
-## 🚀 Quick Start
-
-### 1. Prerequisites
-- **Python 3.10+**
-- **Neo4j 5.x** running locally or via Docker
-- **Ollama** running locally (if using local models):
-  ```bash
-  ollama pull qwen3.5:0.8b
-  ollama pull mistral
-  ollama serve
-  ```
-
-### 2. Backend Setup
 ```bash
-# Navigate to backend directory
-cd backend
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen3.5:0.8b
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+OLLAMA_NUM_GPU=0
 
-# Create and activate virtual environment
-python -m venv venv
-# On Windows:
-venv\Scripts\activate
-# On Linux / macOS:
-# source venv/bin/activate
+CHROMA_PERSIST_DIRECTORY=./backend/chroma_db
+SQLITE_DB_PATH=./backend/documents.db
 
-# Install dependencies
-pip install -r requirements.txt
+CHUNK_SIZE=1000
+CHUNK_OVERLAP=200
+RETRIEVAL_TOP_K=5
 
-# Start FastAPI server
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+BACKEND_URL=http://localhost:8000
 ```
-*API documentation is interactively available at [http://localhost:8000/docs](http://localhost:8000/docs).*
 
-### 3. Frontend Setup
-In a new terminal:
-```bash
-# Navigate to frontend directory
-cd frontend
+### 3. Install Backend Dependencies
 
-# Create and activate virtual environment
-python -m venv venv
-# On Windows:
-venv\Scripts\activate
-# On Linux / macOS:
-# source venv/bin/activate
-
-# Install dependencies
+```powershell
+cd backend
 pip install -r requirements.txt
+```
 
-# Run Streamlit app
+### 4. Install Frontend Dependencies
+
+```powershell
+cd ../frontend
+pip install -r requirements.txt
+```
+
+## Running the Application
+
+### Start Backend (Terminal 1)
+
+```powershell
+cd backend
+uvicorn main:app --reload
+```
+
+Backend will be available at `http://localhost:8000`
+
+API docs at `http://localhost:8000/docs`
+
+### Start Frontend (Terminal 2)
+
+```powershell
+cd frontend
 streamlit run app.py
 ```
-*Access the UI at [http://localhost:8501](http://localhost:8501).*
 
----
+Frontend will open in your browser at `http://localhost:8501`
 
-## 🧪 Testing & Verification
+## Usage
 
-Run tests from the root or backend directory:
+### 1. Upload Documents
 
-```bash
-# Run all backend unit and property tests
-pytest backend/tests
+1. Navigate to the **Upload** page
+2. Choose a PDF or TXT file
+3. Click "Upload and Process"
+4. Wait for status to change from `processing` → `completed`
 
-# Run frontend tests
-pytest frontend/tests
+The system will:
+- Parse the document text
+- Split it into semantic chunks (1000 chars with 200 overlap)
+- Generate embeddings using Ollama
+- Store chunks in ChromaDB vector database
+- Save metadata in SQLite
 
-# Run GraphRAG end-to-end smoke test
-python test_graphrag_smoketest.py
+### 2. Query Documents
+
+1. Navigate to the **Chat** page
+2. Ask questions about your uploaded documents
+3. The system will:
+   - Embed your query
+   - Search for the 5 most relevant chunks
+   - Generate a grounded answer using the LLM
+
+## API Endpoints
+
+### Documents
+
+- `POST /documents/upload` - Upload PDF/TXT file
+- `GET /documents/` - List all documents
+- `GET /documents/{id}` - Get document status
+- `DELETE /documents/{id}` - Delete document and its chunks
+
+### Chat
+
+- `POST /chat/query` - Query documents with RAG
+
+### Health
+
+- `GET /health` - Service health check
+
+## Project Structure
+
+```
+scatterbrain/
+├── backend/
+│   ├── main.py                    # FastAPI app entry point
+│   ├── config.py                  # Settings (from .env)
+│   ├── models/                    # Pydantic models
+│   │   ├── chat.py
+│   │   └── document.py
+│   ├── routers/                   # API endpoints
+│   │   ├── chat.py
+│   │   ├── documents.py
+│   │   └── health.py
+│   ├── services/                  # Business logic
+│   │   ├── chat_service.py        # RAG query orchestration
+│   │   ├── document_service.py    # Upload & processing pipeline
+│   │   ├── document_parser.py     # PDF/TXT parsing
+│   │   ├── text_chunker.py        # LangChain text splitting
+│   │   ├── vector_store.py        # ChromaDB wrapper
+│   │   ├── document_db.py         # SQLite persistence
+│   │   └── ollama_client.py       # Ollama API client
+│   └── requirements.txt
+├── frontend/
+│   ├── app.py                     # Streamlit landing page
+│   ├── api_client.py              # HTTP client for backend
+│   ├── pages/
+│   │   ├── 1_Upload.py            # Document upload UI
+│   │   └── 2_Chat.py              # Chat interface
+│   └── requirements.txt
+├── .env                           # Local config (git-ignored)
+├── .env.example                   # Config template
+└── README.md
 ```
 
----
+## Key Features
 
-## 📡 API Reference & Documentation
+✅ **Clean RAG pipeline** - No graph complexity, pure vector-based retrieval  
+✅ **Local-first** - Runs entirely on your machine with Ollama  
+✅ **Persistent storage** - SQLite for metadata, ChromaDB for vectors  
+✅ **Real-time status** - Upload polling with progress indicators  
+✅ **Semantic chunking** - LangChain RecursiveCharacterTextSplitter  
+✅ **Type-safe** - Pydantic models throughout  
+✅ **Production-ready** - Proper error handling, logging, async/await  
 
-Interactive API documentation and schema explorers are automatically hosted by FastAPI:
-- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+## Configuration Options
 
----
+All settings in `.env`:
 
-### 1. Health Check
-Check backend liveness and service initialization.
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `OLLAMA_MODEL` | `qwen3.5:0.8b` | LLM for answer generation |
+| `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model |
+| `OLLAMA_NUM_GPU` | `0` | GPU layers (0=CPU only) |
+| `CHUNK_SIZE` | `1000` | Characters per chunk |
+| `CHUNK_OVERLAP` | `200` | Overlap between chunks |
+| `RETRIEVAL_TOP_K` | `5` | Number of chunks to retrieve |
+| `CHROMA_PERSIST_DIRECTORY` | `./backend/chroma_db` | Vector DB path |
+| `SQLITE_DB_PATH` | `./backend/documents.db` | Document DB path |
 
-- **Endpoint**: `GET /health`
-- **Response**: `200 OK`
-```json
-{
-  "status": "ok"
-}
+## Troubleshooting
+
+**"Ollama is unavailable"**
+- Make sure `ollama serve` is running
+- Check `OLLAMA_BASE_URL` in `.env`
+- Verify models are pulled: `ollama list` (should show qwen3.5:0.8b and nomic-embed-text)
+
+**"No chunks produced from document"**
+- Check if PDF is text-based (not scanned image)
+- For TXT files, verify UTF-8 encoding
+
+**Slow processing**
+- Ollama CPU mode is slow; consider using GPU if available
+- Reduce `CHUNK_SIZE` to process fewer chunks
+- Smaller models (e.g., `phi3:mini`) are faster but less accurate
+
+**Import errors**
+- Ensure you're in the correct directory when running commands
+- Reinstall dependencies: `pip install -r requirements.txt`
+
+## Development
+
+**Backend tests:**
+```powershell
+cd backend
+pytest
 ```
 
-```bash
-curl -X GET http://localhost:8000/health
+**Backend with auto-reload:**
+```powershell
+uvicorn main:app --reload --log-level debug
 ```
 
----
-
-### 2. Upload Document
-Upload a `.pdf`, `.docx`, or `.txt` legal document and initiate background parsing and indexing.
-
-- **Endpoint**: `POST /documents/upload`
-- **Content-Type**: `multipart/form-data`
-- **Parameters**:
-  - `file` (*required*): File binary to upload.
-  - `index_type` (*optional*): Indexing strategy — `"graphrag"` (default) or `"standard_rag"`.
-- **Response**: `202 Accepted`
-```json
-{
-  "document_id": "8f3b1479-d5c4-4b52-9b2d-c2bb475654ee"
-}
+**Clear vector database:**
+```powershell
+rm -rf backend/chroma_db
+rm backend/documents.db
 ```
 
-```bash
-curl -X POST http://localhost:8000/documents/upload \
-  -F "file=@/path/to/sarb_manual.pdf" \
-  -F "index_type=graphrag"
-```
+## License
 
----
-
-### 3. List Documents
-Retrieve all tracked documents with their current ingestion states.
-
-- **Endpoint**: `GET /documents`
-- **Response**: `200 OK`
-```json
-[
-  {
-    "document_id": "8f3b1479-d5c4-4b52-9b2d-c2bb475654ee",
-    "filename": "sarb_manual.pdf",
-    "uploaded_at": "2026-09-01T12:00:00Z",
-    "status": "completed",
-    "error": null
-  }
-]
-```
-*Possible `status` values: `"processing"`, `"completed"`, `"failed"`.*
-
-```bash
-curl -X GET http://localhost:8000/documents
-```
-
----
-
-### 4. Get Document Details
-Retrieve the status and metadata for a specific document by its ID.
-
-- **Endpoint**: `GET /documents/{document_id}`
-- **Response**: `200 OK`
-```json
-{
-  "document_id": "8f3b1479-d5c4-4b52-9b2d-c2bb475654ee",
-  "filename": "sarb_manual.pdf",
-  "uploaded_at": "2026-09-01T12:00:00Z",
-  "status": "completed",
-  "error": null
-}
-```
-- **Errors**:
-  - `404 Not Found`: If `document_id` is invalid or not found.
-
-```bash
-curl -X GET http://localhost:8000/documents/8f3b1479-d5c4-4b52-9b2d-c2bb475654ee
-```
-
----
-
-### 5. Get Graph Summary
-Retrieve the total number of Neo4j entities (nodes) and relationships (edges) extracted for a processed document.
-
-- **Endpoint**: `GET /documents/{document_id}/graph-summary`
-- **Response**: `200 OK`
-```json
-{
-  "node_count": 284,
-  "edge_count": 512
-}
-```
-- **Errors**:
-  - `404 Not Found`: If document does not exist.
-  - `503 Service Unavailable`: If Neo4j database is unreachable.
-
-```bash
-curl -X GET http://localhost:8000/documents/8f3b1479-d5c4-4b52-9b2d-c2bb475654ee/graph-summary
-```
-
----
-
-### 6. Conversational Chat Query
-Query the legal knowledge base with conversational history, choice of LLM backend, and retrieval strategy.
-
-- **Endpoint**: `POST /chat/query`
-- **Content-Type**: `application/json`
-- **Request Body**:
-```json
-{
-  "query": "What are the travel allowance limits for South African residents?",
-  "history": [
-    {"role": "user", "content": "Hello"},
-    {"role": "assistant", "content": "Hello! How can I assist with the legal manual?"}
-  ],
-  "backend": "ollama",
-  "rag_mode": "graphrag"
-}
-```
-
-| Field | Type | Options / Constraints | Description |
-| :--- | :--- | :--- | :--- |
-| `query` | `string` | Required | User's question |
-| `history` | `list[dict]` | `[{"role": "user"\|"assistant", "content": "..."}]` | Chat history (backend automatically trims to last 10 messages) |
-| `backend` | `string` | `"ollama"`, `"deepseek"`, `"openrouter"` (default: `"ollama"`) | Target LLM provider for Cypher & answer synthesis |
-| `rag_mode` | `string` | `"graphrag"`, `"standard_rag"` (default: `"graphrag"`) | Knowledge Graph Cypher retrieval vs. ChromaDB vector search |
-
-- **Response**: `200 OK`
-```json
-{
-  "response": "Under Section B.4(A), the single discretionary allowance for South African residents is R1,000,000 per calendar year...",
-  "history": [
-    {"role": "user", "content": "Hello"},
-    {"role": "assistant", "content": "Hello! How can I assist with the legal manual?"},
-    {"role": "user", "content": "What are the travel allowance limits for South African residents?"},
-    {"role": "assistant", "content": "Under Section B.4(A), the single discretionary allowance for South African residents is R1,000,000 per calendar year..."}
-  ],
-  "backend": "ollama",
-  "generated_cypher": "MATCH (p:Provision) WHERE p.path STARTS WITH 'B.4' RETURN p.path, p.text",
-  "cypher_source": "text2cypher"
-}
-```
-
-- **Errors**:
-  - `400 Bad Request`: If selected external backend is missing its required `.env` API key.
-  - `401 Unauthorized`: If the external API key is invalid.
-  - `503 Service Unavailable`: If Ollama or cloud providers are unreachable or rate-limited.
-
-```bash
-curl -X POST http://localhost:8000/chat/query \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "What are the travel allowance limits for South African residents?",
-    "history": [],
-    "backend": "ollama",
-    "rag_mode": "graphrag"
-  }'
-```
+MIT

@@ -1,57 +1,29 @@
-"""Chat service using Text2CypherRetriever for context retrieval.
+"""Chat service for RAG-based question answering.
 
-Retrieval is handled by GraphQueryService (Text2CypherRetriever).  Final
-answer generation is dispatched to one of three backends based on the
-``backend`` parameter supplied by the caller:
-
-  - ``"ollama"``      — local Mistral 7B via OllamaLLMAdapter (default)
-  - ``"deepseek"``    — DeepSeek Chat API (DEEPSEEK_CHAT_API_KEY required)
-  - ``"openrouter"``  — OpenRouter API (OPENROUTER_API_KEY required),
-                        free-tier models prioritised
-
-Both the Cypher-generation step (Text2CypherRetriever) and the answer-
-synthesis step respect the selected backend.
-
-No embedder, no VectorRetriever, no vector index anywhere in this path.
-
-Requirements: 5.3, 5.4, 5.5, 6.1, 6.2, 6.4, 6.5
+Orchestrates retrieval from vector store and answer generation via LLM.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import List, Tuple
 
-from backend.services.graph_query_service import GraphQueryService
-from backend.services.ollama_adapters import OllamaLLMAdapter
-from backend.services.ollama_client import OllamaClientError
+from services.ollama_client import OllamaClient, OllamaClientError
+from services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Prompt template (used by Ollama path; external backends build their own)
-# ---------------------------------------------------------------------------
-
-_LEGAL_PROMPT = """\
-You are a legal document analysis assistant for the South African Reserve Bank \
-Currency and Exchanges Manual for Authorised Dealers.
-Answer the question using ONLY the information in the provided context.
-If the context does not contain enough information to answer, say so clearly. \
-Do not fabricate facts. Where possible, cite the provision path (e.g. B.4(B)(iv)).
-
-CONTEXT:
-{context}
-
-QUESTION:
-{query}
-
-ANSWER:"""
-
+# RAG prompt template
 _RAG_PROMPT = """\
-You are a helpful document assistant. Answer the user's question using the \
-provided context from the uploaded documents. If the context is empty or \
-doesn't contain relevant information, respond conversationally and let the \
-user know they should ask something related to their uploaded documents.
+You are a helpful document assistant. Answer the user's question using ONLY \
+the provided context from the uploaded documents.
+
+If the context contains relevant information, provide a clear and concise answer.
+If the context is empty or doesn't contain enough information to answer the question, \
+respond politely and let the user know that you don't have enough information in \
+the uploaded documents to answer their question.
+
+Do not make up information or use knowledge outside of the provided context.
 
 CONTEXT:
 {context}
@@ -63,153 +35,74 @@ ANSWER:"""
 
 
 class ChatService:
-    """Orchestrates context retrieval and LLM answer generation.
-
+    """Orchestrates RAG-based question answering.
+    
     Parameters
     ----------
-    graph_query_service:
-        Retrieves relevant Cypher query results for a user question.
-    llm_adapter:
-        OllamaLLMAdapter wrapping Mistral 7B for default (Ollama) answer generation.
+    vector_store:
+        Vector store for retrieving relevant document chunks.
+    ollama_client:
+        Ollama client for LLM generation.
     """
-
+    
     def __init__(
         self,
-        graph_query_service: GraphQueryService,
-        llm_adapter: OllamaLLMAdapter,
+        vector_store: VectorStore,
+        ollama_client: OllamaClient,
     ) -> None:
-        self._graph_query_service = graph_query_service
-        self._llm = llm_adapter
-
-        # Lazily-initialised external clients (built on first use per backend).
-        self._deepseek_client = None
-        self._openrouter_client = None
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
-    def _get_deepseek_client(self):
-        if self._deepseek_client is None:
-            from backend.config import settings
-            from backend.services.external_llm_client import DeepSeekClient
-
-            if not settings.deepseek_chat_api_key:
-                raise RuntimeError(
-                    "DeepSeek backend selected but DEEPSEEK_CHAT_API_KEY is not set in .env."
-                )
-            self._deepseek_client = DeepSeekClient(
-                api_key=settings.deepseek_chat_api_key,
-                model=settings.deepseek_chat_model,
-            )
-        return self._deepseek_client
-
-    def _get_openrouter_client(self):
-        if self._openrouter_client is None:
-            from backend.config import settings
-            from backend.services.external_llm_client import OpenRouterClient
-
-            if not settings.openrouter_api_key:
-                raise RuntimeError(
-                    "OpenRouter backend selected but OPENROUTER_API_KEY is not set in .env."
-                )
-            self._openrouter_client = OpenRouterClient(
-                api_key=settings.openrouter_api_key,
-                site_url=settings.openrouter_site_url,
-                site_name=settings.openrouter_site_name,
-            )
-        return self._openrouter_client
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
+        self._vector_store = vector_store
+        self._ollama_client = ollama_client
+    
     async def query(
         self,
         user_query: str,
-        history: List[Dict[str, str]],
-        backend: str = "ollama",
-        rag_mode: str = "graphrag",
-    ) -> Tuple[str, List[Dict[str, str]], Optional[str], Optional[str]]:
-        """Process a chat query end-to-end.
-
-        1. Retrieve relevant graph context via Text2CypherRetriever (using
-           the LLM selected by *backend*).
-        2. Build a grounded prompt and generate an answer using *backend*.
-
-        Requirements: 5.3, 5.4, 5.5, 6.1, 6.2, 6.4, 6.5
-
-        Parameters
-        ----------
-        user_query:  The user's natural language question.
-        history:     Current conversation history.
-        backend:     ``"ollama"`` | ``"deepseek"`` | ``"openrouter"``.
-
-        Returns
-        -------
-        (response_text, updated_history, generated_cypher, cypher_source)
+        top_k: int = 5,
+    ) -> Tuple[str, List[str]]:
+        """Process a user query using RAG.
+        
+        Steps:
+        1. Retrieve relevant chunks from vector store
+        2. Build context from retrieved chunks
+        3. Generate answer using LLM with context
+        
+        Args:
+            user_query: The user's question.
+            top_k: Number of chunks to retrieve.
+            
+        Returns:
+            Tuple of (answer_text, retrieved_chunks)
         """
-        # Truncate history to last 10 messages (Requirement 6.5).
-        truncated = history[-10:] if len(history) > 10 else history
-
-        logger.info("ChatService.query backend=%s query=%s", backend, user_query)
-
-        # ------------------------------------------------------------------
-        # Step 1: retrieve context from the graph or vector index
-        # ------------------------------------------------------------------
-        if rag_mode == "standard_rag":
-            import chromadb
-            try:
-                client = chromadb.PersistentClient(path="./backend/chroma_db")
-                collection = client.get_collection(name="scatterbrain_docs")
-                results = collection.query(query_texts=[user_query], n_results=5)
-                documents = results.get("documents", [[]])[0]
-                context = "\n\n".join(documents)
-            except Exception as exc:
-                logger.warning("Failed to query ChromaDB: %s", exc)
-                context = ""
-            generated_cypher = None
-            cypher_source = "vector_search"
+        logger.info("Processing chat query: %s", user_query)
+        
+        # Step 1: Retrieve relevant chunks
+        results = await self._vector_store.search(
+            query=user_query,
+            top_k=top_k,
+        )
+        
+        # Step 2: Build context
+        retrieved_chunks = [result["text"] for result in results]
+        
+        if not retrieved_chunks:
+            context = "(No relevant documents found)"
         else:
-            context, generated_cypher, cypher_source = (
-                await self._graph_query_service.get_relevant_context(
-                    user_query, top_k=5, backend=backend
-                )
-            )
-
-        # ------------------------------------------------------------------
-        # Step 2: generate an answer using the selected backend.
-        # ------------------------------------------------------------------
-        if backend == "deepseek":
-            client = self._get_deepseek_client()
-            response_text = await client.generate_answer(
-                question=user_query,
-                context=context,
-                history=truncated,
-            )
-
-        elif backend == "openrouter":
-            client = self._get_openrouter_client()
-            response_text = await client.generate_answer(
-                question=user_query,
-                context=context,
-                history=truncated,
-            )
-
-        else:
-            # Default: local Ollama.
-            # Use the domain-locked legal prompt for GraphRAG, and a general
-            # conversational prompt for Standard RAG.
-            template = _RAG_PROMPT if rag_mode == "standard_rag" else _LEGAL_PROMPT
-            prompt = template.format(context=context, query=user_query)
-            try:
-                response_text = await self._llm._client.generate(prompt)
-            except OllamaClientError as exc:
-                logger.error("Ollama generation failed: %s", exc)
-                raise
-
-        updated_history = truncated + [
-            {"role": "user", "content": user_query},
-            {"role": "assistant", "content": response_text},
-        ]
-        return response_text, updated_history, generated_cypher, cypher_source
+            context = "\n\n".join(retrieved_chunks)
+        
+        logger.info(
+            "Retrieved %d chunks for query (total chars: %d)",
+            len(retrieved_chunks),
+            len(context),
+        )
+        
+        # Step 3: Generate answer
+        prompt = _RAG_PROMPT.format(context=context, query=user_query)
+        
+        try:
+            response_text = await self._ollama_client.generate(prompt)
+        except OllamaClientError as exc:
+            logger.error("Ollama generation failed: %s", exc)
+            raise
+        
+        logger.info("Generated answer (length: %d chars)", len(response_text))
+        
+        return response_text, retrieved_chunks

@@ -1,11 +1,6 @@
-"""Chat Page — Scatterbrain Legal Knowledge Graph.
+"""Chat Page — Scatterbrain RAG.
 
-Provides a conversational interface for querying the legal knowledge graph.
-Users can select the LLM backend (Ollama / DeepSeek / OpenRouter) via a
-sidebar dropdown.  The selected backend is sent to the FastAPI backend on
-every query and controls both Cypher generation and answer synthesis.
-
-Requirements: 5.1, 5.2, 5.6, 5.7, 5.8
+Provides a conversational interface for querying uploaded documents using RAG.
 """
 
 from __future__ import annotations
@@ -15,101 +10,44 @@ from pathlib import Path
 
 import streamlit as st
 
-# Ensure the frontend package root is on the path when running via
-# ``streamlit run frontend/app.py`` from the project root.
+# Ensure the frontend package root is on the path
 _frontend_root = Path(__file__).resolve().parent.parent
 if str(_frontend_root) not in sys.path:
     sys.path.insert(0, str(_frontend_root))
 
-import api_client  # noqa: E402  (import after sys.path fixup)
-
-# ---------------------------------------------------------------------------
-# Page header
-# ---------------------------------------------------------------------------
+import api_client  # noqa: E402
 
 st.title("💬 Chat with Your Documents")
 
 # ---------------------------------------------------------------------------
 # Session state initialisation
-# Requirement 5.1 — maintain Chat Session message history
 # ---------------------------------------------------------------------------
 
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
-
-if "selected_backend" not in st.session_state:
-    st.session_state["selected_backend"] = "ollama"
-
-if "selected_rag_mode" not in st.session_state:
-    st.session_state["selected_rag_mode"] = "graphrag"
 
 # ---------------------------------------------------------------------------
 # Sidebar controls
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
-    st.header("Settings")
-
-    # ------------------------------------------------------------------
-    # Backend selector
-    # ------------------------------------------------------------------
-    _BACKEND_OPTIONS: dict[str, str] = {
-        "🖥️  Ollama (local)": "ollama",
-        "🤖  DeepSeek": "deepseek",
-        "🌐  OpenRouter (free-tier first)": "openrouter",
-    }
-
-    selected_label = st.selectbox(
-        "LLM Backend",
-        options=list(_BACKEND_OPTIONS.keys()),
-        index=list(_BACKEND_OPTIONS.values()).index(
-            st.session_state["selected_backend"]
-        ),
-        help=(
-            "Choose the LLM used for both Cypher generation and answer synthesis.\n\n"
-            "- **Ollama** — local model, no API key needed\n"
-            "- **DeepSeek** — requires DEEPSEEK_CHAT_API_KEY in .env\n"
-            "- **OpenRouter** — requires OPENROUTER_API_KEY in .env; "
-            "free-tier models are used first, paid fallback only when all "
-            "free-tier slots are exhausted"
-        ),
-    )
-    selected_backend: str = _BACKEND_OPTIONS[selected_label]
-    st.session_state["selected_backend"] = selected_backend
-
-    rag_label = st.selectbox(
-        "Retrieval Mode",
-        options=["GraphRAG", "Standard RAG"],
-        index=0 if st.session_state["selected_rag_mode"] == "graphrag" else 1,
-        help="Choose whether to retrieve context from the Neo4j Knowledge Graph or the standard vector index."
-    )
-    selected_rag_mode = "graphrag" if rag_label == "GraphRAG" else "standard_rag"
-    st.session_state["selected_rag_mode"] = selected_rag_mode
-
-    # Show a hint if the user picks an external backend.
-    if selected_backend == "deepseek":
-        st.info(
-            "DeepSeek backend selected.\n\n"
-            "Make sure **DEEPSEEK_CHAT_API_KEY** is set in your `.env` file."
-        )
-    elif selected_backend == "openrouter":
-        st.info(
-            "OpenRouter backend selected.\n\n"
-            "Make sure **OPENROUTER_API_KEY** is set in your `.env` file.\n\n"
-            "Free-tier models are tried first; the paid fallback is only used "
-            "when all free slots are rate-limited."
-        )
-
-    st.divider()
     st.header("Session")
     if st.button("Clear conversation", use_container_width=True):
         st.session_state["messages"] = []
         st.rerun()
     st.caption(f"{len(st.session_state['messages'])} message(s) in history")
+    
+    st.divider()
+    st.info(
+        "**How it works:**\n\n"
+        "1. Upload documents in the Upload page\n"
+        "2. Ask questions here\n"
+        "3. The system retrieves relevant chunks from the vector database\n"
+        "4. The LLM generates an answer based only on retrieved context"
+    )
 
 # ---------------------------------------------------------------------------
 # Message history panel
-# Requirements 5.1, 5.6 — scrollable panel displaying conversation
 # ---------------------------------------------------------------------------
 
 st.subheader("Conversation")
@@ -123,7 +61,6 @@ for message in st.session_state["messages"]:
 
 # ---------------------------------------------------------------------------
 # Query input and submission
-# Requirements 5.2, 5.6, 5.7, 5.8
 # ---------------------------------------------------------------------------
 
 query = st.chat_input("Ask a question about your documents…")
@@ -133,38 +70,23 @@ if query:
     with st.chat_message("user"):
         st.markdown(query)
 
-    # Requirement 5.7 — show loading indicator while backend processes the query
+    # Show loading indicator while backend processes the query
     with st.chat_message("assistant"):
-        backend_label = selected_label.split("  ", 1)[-1]  # strip emoji prefix
-        with st.spinner(f"Thinking… ({backend_label})"):
+        with st.spinner("Thinking…"):
             try:
-                # Requirement 5.2 — send query + current history + backend to backend
                 result = api_client.chat_query(
                     query=query,
                     history=st.session_state["messages"],
-                    backend=selected_backend,
-                    rag_mode=selected_rag_mode,
                 )
 
                 assistant_response: str = result.get("response", "")
-                used_backend: str = result.get("backend", selected_backend)
-                generated_cypher: str | None = result.get("generated_cypher")
-                cypher_source: str | None = result.get("cypher_source")
+                retrieved_chunks: int = result.get("retrieved_chunks", 0)
 
-                # Display the assistant's reply with a small backend badge.
+                # Display the assistant's reply
                 st.markdown(assistant_response)
-                st.caption(f"_Answered by: **{used_backend}**_")
+                st.caption(f"_Retrieved {retrieved_chunks} relevant chunks_")
 
-                # Show the generated Cypher in a collapsible expander.
-                if generated_cypher:
-                    source_label = (
-                        "keyword fallback" if cypher_source == "keyword_fallback"
-                        else "Text2Cypher"
-                    )
-                    with st.expander(f"🔍 Graph query ({source_label})", expanded=False):
-                        st.code(generated_cypher, language="cypher")
-
-                # Requirement 5.6 — append both messages to session state
+                # Append both messages to session state
                 st.session_state["messages"].append(
                     {"role": "user", "content": query}
                 )
@@ -172,15 +94,9 @@ if query:
                     {"role": "assistant", "content": assistant_response}
                 )
 
-            except Exception as exc:  # noqa: BLE001
-                # Requirement 5.8 — display error without clearing history
+            except Exception as exc:
                 error_msg = str(exc)
-                if "400" in error_msg:
-                    st.error(
-                        f"Configuration error: {error_msg}\n\n"
-                        "Check that the required API key is set in your `.env` file."
-                    )
-                elif "503" in error_msg:
+                if "503" in error_msg:
                     st.error(
                         "Ollama is unavailable. Make sure `ollama serve` is running."
                     )

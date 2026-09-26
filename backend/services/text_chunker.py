@@ -1,65 +1,110 @@
-"""Text chunker service for splitting document text into semantic chunks."""
+"""Text chunking service with simple recursive splitting.
+
+Provides semantic chunking with configurable size and overlap.
+"""
 
 from __future__ import annotations
 
+import re
+from typing import List
 
-def chunk_text(
-    text: str,
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
-) -> list[str]:
-    """Split input text into overlapping chunks of a specified maximum size.
+from config import settings
 
-    Attempts to split text at space or newline boundaries to avoid breaking words.
 
+def chunk_text(text: str) -> List[str]:
+    """Split text into semantically meaningful chunks.
+    
+    Uses recursive character-based splitting that tries to split on natural
+    boundaries (double newlines, single newlines, sentences, words) before
+    falling back to character-based splitting.
+    
     Args:
-        text: The raw input document text.
-        chunk_size: Target maximum character length of each chunk.
-        chunk_overlap: The target character overlap between adjacent chunks.
-
+        text: Input text to chunk.
+        
     Returns:
-        A list of chunk strings.
+        List of text chunks with configured size and overlap.
     """
-    if not text or chunk_size <= 0:
+    if not text or not text.strip():
         return []
+    
+    chunk_size = settings.chunk_size
+    chunk_overlap = settings.chunk_overlap
+    
+    # Separators in order of preference
+    separators = ["\n\n", "\n", ". ", " ", ""]
+    
+    return _recursive_split(text, separators, chunk_size, chunk_overlap)
 
-    if chunk_overlap >= chunk_size:
-        chunk_overlap = chunk_size // 2
 
-    chunks: list[str] = []
-    start = 0
-    text_len = len(text)
-
-    while start < text_len:
-        # Candidate end of window
-        end = start + chunk_size
-        if end >= text_len:
-            chunk = text[start:].strip()
-            if chunk:
-                chunks.append(chunk)
-            break
-
-        # Search backward for a word/line boundary within a reasonable range (15% of chunk_size)
-        search_min = max(start, end - int(chunk_size * 0.15))
-        boundary = -1
-        for i in range(end, search_min - 1, -1):
-            if text[i] in ("\n", "\r", " ", "\t"):
-                boundary = i
-                break
-
-        if boundary != -1:
-            end = boundary + 1
-
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-
-        # Move starting pointer for the next chunk, incorporating overlap
-        next_start = end - chunk_overlap
-        if next_start <= start:
-            # Prevent infinite loops if progress is not made
-            start = end
+def _recursive_split(
+    text: str,
+    separators: List[str],
+    chunk_size: int,
+    chunk_overlap: int,
+) -> List[str]:
+    """Recursively split text on separators."""
+    final_chunks = []
+    
+    # Get the current separator
+    separator = separators[0] if separators else ""
+    
+    # Split on separator
+    if separator:
+        splits = text.split(separator)
+    else:
+        splits = list(text)
+    
+    # Merge splits into chunks
+    current_chunk = []
+    current_length = 0
+    
+    for split in splits:
+        split_len = len(split)
+        
+        # If single split is too long and we have more separators, recurse
+        if split_len > chunk_size and len(separators) > 1:
+            # Save current chunk if it exists
+            if current_chunk:
+                final_chunks.append(separator.join(current_chunk))
+                current_chunk = []
+                current_length = 0
+            
+            # Recurse on the long split
+            sub_chunks = _recursive_split(
+                split,
+                separators[1:],
+                chunk_size,
+                chunk_overlap,
+            )
+            final_chunks.extend(sub_chunks)
         else:
-            start = next_start
-
-    return chunks
+            # Add to current chunk if it fits
+            if current_length + split_len + len(separator) <= chunk_size:
+                current_chunk.append(split)
+                current_length += split_len + len(separator)
+            else:
+                # Save current chunk and start new one
+                if current_chunk:
+                    final_chunks.append(separator.join(current_chunk))
+                
+                # Handle overlap
+                if chunk_overlap > 0 and current_chunk:
+                    # Keep last few items for overlap
+                    overlap_text = separator.join(current_chunk)
+                    if len(overlap_text) > chunk_overlap:
+                        overlap_start = len(overlap_text) - chunk_overlap
+                        overlap_text = overlap_text[overlap_start:]
+                        current_chunk = [overlap_text, split]
+                        current_length = len(overlap_text) + len(separator) + split_len
+                    else:
+                        current_chunk = [split]
+                        current_length = split_len
+                else:
+                    current_chunk = [split]
+                    current_length = split_len
+    
+    # Add final chunk
+    if current_chunk:
+        final_chunks.append(separator.join(current_chunk))
+    
+    return [chunk for chunk in final_chunks if chunk.strip()]

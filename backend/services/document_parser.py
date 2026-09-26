@@ -1,8 +1,6 @@
-"""
-Document parser service for extracting raw text from uploaded files.
+"""Document parser service for extracting raw text from uploaded files.
 
-Supports PDF (via pdfplumber), DOCX (via python-docx), and plain TXT files.
-Dispatches to the appropriate parser based on the file extension.
+Supports PDF (via pdfplumber) and plain TXT files.
 """
 
 from __future__ import annotations
@@ -16,7 +14,7 @@ class DocumentParsingError(Exception):
 
 
 def parse_document(filename: str, content: bytes) -> str:
-    """Dispatch to the appropriate parser based on the file extension.
+    """Extract text from PDF or TXT files.
 
     Args:
         filename: Original filename including extension.
@@ -32,12 +30,10 @@ def parse_document(filename: str, content: bytes) -> str:
     ext = Path(filename).suffix.lower()
     if ext == ".pdf":
         return _parse_pdf(content)
-    elif ext == ".docx":
-        return _parse_docx(content)
     elif ext == ".txt":
         return _parse_txt(content)
     else:
-        raise ValueError(f"Unsupported file type: {ext!r}")
+        raise ValueError(f"Unsupported file type: {ext!r}. Only PDF and TXT are supported.")
 
 
 def _parse_pdf(content: bytes) -> str:
@@ -71,46 +67,6 @@ def _parse_pdf(content: bytes) -> str:
     except Exception as exc:
         raise DocumentParsingError(
             f"Failed to parse PDF: {exc}"
-        ) from exc
-
-
-def _parse_docx(content: bytes) -> str:
-    """Extract text from a DOCX file (paragraphs and table cells), joined with newlines.
-
-    Args:
-        content: Raw DOCX bytes.
-
-    Returns:
-        Extracted text with paragraphs and table cells separated by newline characters.
-
-    Raises:
-        DocumentParsingError: If the DOCX cannot be opened or read.
-    """
-    try:
-        from docx import Document  # type: ignore
-    except ImportError as exc:
-        raise DocumentParsingError(
-            "python-docx is not installed. Install it with: pip install python-docx"
-        ) from exc
-
-    try:
-        doc = Document(io.BytesIO(content))
-        parts: list[str] = []
-
-        for paragraph in doc.paragraphs:
-            parts.append(paragraph.text)
-
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    parts.append(cell.text)
-
-        return "\n".join(parts)
-    except DocumentParsingError:
-        raise
-    except Exception as exc:
-        raise DocumentParsingError(
-            f"Failed to parse DOCX: {exc}"
         ) from exc
 
 

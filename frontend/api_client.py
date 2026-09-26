@@ -1,9 +1,7 @@
-"""HTTP client for the Scatterbrain backend API.
+"""HTTP client for the Scatterbrain RAG backend API.
 
 All functions read ``BACKEND_URL`` from the environment, defaulting to
 ``http://localhost:8000``.
-
-Requirements: 1.2, 1.3, 5.2, 7.2, 7.4, 8.3
 """
 
 from __future__ import annotations
@@ -14,26 +12,20 @@ import httpx
 
 BACKEND_URL: str = os.getenv("BACKEND_URL", "http://localhost:8000")
 
-# Supported file extensions for upload validation (Requirement 1.3)
-SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".pdf", ".docx", ".txt"})
+# Supported file extensions for upload validation
+SUPPORTED_EXTENSIONS: frozenset[str] = frozenset({".pdf", ".txt"})
 
 
 def validate_file_type(filename: str) -> bool:
     """Return True if *filename* has a supported extension, False otherwise.
-
-    Supported extensions are ``.pdf``, ``.docx``, and ``.txt``.
-
-    This validation must be performed before calling :func:`upload_document`
-    so that unsupported file types are rejected on the client side and the
-    upload API is never called for them.
-
-    Requirements: 1.3
-
+    
+    Supported extensions are ``.pdf`` and ``.txt``.
+    
     Parameters
     ----------
     filename:
         The name of the file to validate (e.g. ``"contract.pdf"``).
-
+        
     Returns
     -------
     bool
@@ -43,23 +35,20 @@ def validate_file_type(filename: str) -> bool:
     return ext in SUPPORTED_EXTENSIONS
 
 
-def upload_document(file_bytes: bytes, filename: str, index_type: str = "graphrag") -> dict:
+def upload_document(file_bytes: bytes, filename: str) -> dict:
     """Upload a document to the backend for processing.
-
+    
     Sends a multipart/form-data POST request to ``/documents/upload``.
     Returns the parsed JSON response body, which contains a ``document_id``
     field on success (HTTP 202).
-
-    Requirements: 1.2
-
+    
     Parameters
     ----------
     file_bytes:
         Raw bytes of the file to upload.
     filename:
-        Original filename, used as the ``filename`` field in the multipart
-        form and to set the MIME type.
-
+        Original filename, used as the ``filename`` field in the multipart form.
+        
     Raises
     ------
     httpx.HTTPStatusError
@@ -69,7 +58,6 @@ def upload_document(file_bytes: bytes, filename: str, index_type: str = "graphra
         response = client.post(
             f"{BACKEND_URL}/documents/upload",
             files={"file": (filename, file_bytes, "application/octet-stream")},
-            data={"index_type": index_type},
         )
         response.raise_for_status()
         return response.json()
@@ -77,18 +65,16 @@ def upload_document(file_bytes: bytes, filename: str, index_type: str = "graphra
 
 def get_document_status(document_id: str) -> dict:
     """Fetch the current status record for a document.
-
+    
     Sends a GET request to ``/documents/{document_id}`` and returns the
     parsed JSON body containing ``document_id``, ``filename``,
     ``uploaded_at``, and ``status`` fields.
-
-    Requirements: 7.2
-
+    
     Parameters
     ----------
     document_id:
         The UUID string returned by :func:`upload_document`.
-
+        
     Raises
     ------
     httpx.HTTPStatusError
@@ -103,13 +89,11 @@ def get_document_status(document_id: str) -> dict:
 
 def list_documents() -> list:
     """Return the list of all uploaded documents.
-
+    
     Sends a GET request to ``/documents`` and returns the parsed JSON array.
     Each element contains ``document_id``, ``filename``, ``uploaded_at``,
     and ``status`` fields.
-
-    Requirements: 7.2
-
+    
     Raises
     ------
     httpx.HTTPStatusError
@@ -121,65 +105,51 @@ def list_documents() -> list:
         return response.json()
 
 
-def get_graph_summary(document_id: str) -> dict:
-    """Fetch the entity/relationship counts for a processed document.
-
-    Sends a GET request to ``/documents/{document_id}/graph-summary`` and
-    returns the parsed JSON body containing ``node_count`` and
-    ``edge_count`` fields.
-
-    Requirements: 7.4
-
+def delete_document(document_id: str) -> None:
+    """Delete a document and all its chunks.
+    
+    Sends a DELETE request to ``/documents/{document_id}``.
+    
     Parameters
     ----------
     document_id:
-        The UUID string of the document whose graph summary is requested.
-
+        The UUID string of the document to delete.
+        
     Raises
     ------
     httpx.HTTPStatusError
         If the backend returns a non-2xx status code.
     """
     with httpx.Client() as client:
-        response = client.get(
-            f"{BACKEND_URL}/documents/{document_id}/graph-summary"
-        )
+        response = client.delete(f"{BACKEND_URL}/documents/{document_id}")
         response.raise_for_status()
-        return response.json()
 
 
-def chat_query(query: str, history: list, backend: str = "ollama", rag_mode: str = "graphrag") -> dict:
+def chat_query(query: str, history: list) -> dict:
     """Submit a chat query to the backend and return the LLM response.
-
-    Sends a POST request to ``/chat/query`` with a 180-second timeout
-    (external APIs can be slower than local Ollama on first call).
+    
+    Sends a POST request to ``/chat/query`` with a 180-second timeout.
     Returns the parsed JSON body containing ``response`` (the LLM answer
-    text), ``history`` (the updated message history), and ``backend``
-    (echoed back from the server).
-
-    Requirements: 5.2
-
+    text) and ``history`` (the updated message history).
+    
     Parameters
     ----------
     query:
         The user's natural-language question.
     history:
-        The current Chat Session message history as a list of
+        The current chat session message history as a list of
         ``{"role": "user"|"assistant", "content": str}`` dicts.
-    backend:
-        LLM backend to use: ``"ollama"`` (default), ``"deepseek"``, or
-        ``"openrouter"``.
-
+        
     Raises
     ------
     httpx.HTTPStatusError
         If the backend returns a non-2xx status code (e.g. 503 when Ollama
-        is unavailable, or 400 when an API key is missing).
+        is unavailable).
     """
     with httpx.Client(timeout=180.0) as client:
         response = client.post(
             f"{BACKEND_URL}/chat/query",
-            json={"query": query, "history": history, "backend": backend, "rag_mode": rag_mode},
+            json={"query": query, "history": history},
         )
         response.raise_for_status()
         return response.json()
