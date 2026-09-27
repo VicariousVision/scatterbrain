@@ -21,7 +21,9 @@ from config import settings
 from routers import chat as chat_router
 from routers import documents as documents_router
 from routers import health as health_router
+from routers import search as search_router
 from services.chat_service import ChatService
+from services.document_db import DocumentDB
 from services.document_service import DocumentService
 from services.ollama_client import OllamaClient
 from services.vector_store import VectorStore
@@ -76,7 +78,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ------------------------------------------------------------------
     # Create service singletons
     # ------------------------------------------------------------------
-    document_service = DocumentService(vector_store=vector_store)
+    document_db = DocumentDB()
+    document_service = DocumentService(vector_store=vector_store, document_db=document_db)
     chat_service = ChatService(
         vector_store=vector_store,
         ollama_client=ollama_client,
@@ -87,6 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ------------------------------------------------------------------
     documents_router.set_services(document_service=document_service)
     chat_router.set_services(chat_service=chat_service)
+    search_router.set_services(vector_store=vector_store)
     
     logger.info("Scatterbrain RAG backend started")
     yield
@@ -120,3 +124,4 @@ app.add_middleware(
 app.include_router(health_router.router)
 app.include_router(documents_router.router)
 app.include_router(chat_router.router)
+app.include_router(search_router.router)

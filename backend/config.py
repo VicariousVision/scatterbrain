@@ -3,7 +3,15 @@
 All settings are loaded from .env via pydantic-settings.
 """
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
+
+# .env lives at the repo root (one level above this backend/ package), not
+# inside backend/. Resolve it relative to this file so settings load
+# correctly regardless of the process's current working directory
+# (e.g. running `uvicorn main:app` from inside backend/).
+_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 
 class Settings(BaseSettings):
@@ -29,7 +37,7 @@ class Settings(BaseSettings):
     backend_url: str = "http://localhost:8000"
 
     class Config:
-        env_file = ".env"
+        env_file = str(_ENV_FILE)
         env_prefix = ""
 
 

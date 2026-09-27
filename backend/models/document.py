@@ -42,6 +42,17 @@ class DocumentListItem(BaseModel):
     error: str | None = None
 
 
+class SearchResultItem(BaseModel):
+    """Single match in the GET /search response array."""
+
+    chunk_id: str
+    document_id: str
+    filename: str
+    chunk_index: int
+    text: str
+    similarity: float
+
+
 class GraphSummary(BaseModel):
     """Response body for GET /documents/{document_id}/graph-summary.
 

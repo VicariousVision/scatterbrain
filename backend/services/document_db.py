@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from backend.config import settings
-from backend.models.document import DocumentRecord
+from config import settings
+from models.document import DocumentRecord
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +41,12 @@ class DocumentDB:
         logger.info("DocumentDB initialized at %s", self._db_path)
     
     def _get_connection(self) -> sqlite3.Connection:
-        """Get a database connection with row factory."""
-        conn = sqlite3.connect(self._db_path)
+        """Get a database connection with row factory.
+        
+        Uses a busy timeout since this file is shared with the async
+        VectorStore connection (aiosqlite) held open for the app lifetime.
+        """
+        conn = sqlite3.connect(self._db_path, timeout=10)
         conn.row_factory = sqlite3.Row
         return conn
     

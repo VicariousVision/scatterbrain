@@ -13,9 +13,10 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from models.document import DocumentRecord
+from services.document_db import DocumentDB
 from services.document_parser import parse_document, DocumentParsingError
 from services.text_chunker import chunk_text
 from services.vector_store import VectorStore
@@ -30,14 +31,18 @@ class DocumentService:
     ----------
     vector_store:
         Vector store for embedding and storing document chunks.
+    document_db:
+        Persistent store for document metadata records, so uploads survive
+        an application restart.
     """
     
     def __init__(
         self,
         vector_store: VectorStore,
+        document_db: DocumentDB,
     ) -> None:
         self._vector_store = vector_store
-        self._store: Dict[str, DocumentRecord] = {}
+        self._document_db = document_db
         # One active ingestion at a time to avoid memory bloat
         self._processing_semaphore = asyncio.Semaphore(1)
     
@@ -63,8 +68,8 @@ class DocumentService:
             status="processing",
         )
         
-        # Store in memory
-        self._store[document_id] = record
+        # Persist record so it survives an application restart
+        self._document_db.create(record)
         
         logger.info(
             "Document uploaded: document_id=%s filename=%s",
@@ -81,16 +86,12 @@ class DocumentService:
         return record
     
     def list_documents(self) -> List[DocumentRecord]:
-        """Return all document records from memory.
+        """Return all document records ordered by upload time (newest first).
         
         Returns:
-            List of all document records ordered by upload time (newest first).
+            List of all document records.
         """
-        return sorted(
-            self._store.values(),
-            key=lambda r: r.uploaded_at,
-            reverse=True,
-        )
+        return self._document_db.list_all()
     
     def get_document(self, document_id: str) -> Optional[DocumentRecord]:
         """Return the record for a single document, or None if not found.
@@ -101,10 +102,10 @@ class DocumentService:
         Returns:
             DocumentRecord if found, None otherwise.
         """
-        return self._store.get(document_id)
+        return self._document_db.get(document_id)
     
     async def delete_document(self, document_id: str) -> None:
-        """Delete a document from vector store and memory.
+        """Delete a document from vector store and the persistent store.
         
         Args:
             document_id: Document ID to delete.
@@ -112,8 +113,8 @@ class DocumentService:
         # Delete from vector store
         await self._vector_store.delete_document(document_id)
         
-        # Delete from memory
-        self._store.pop(document_id, None)
+        # Delete from persistent store
+        self._document_db.delete(document_id)
         
         logger.info("Deleted document: %s", document_id)
     
@@ -165,7 +166,7 @@ class DocumentService:
                 )
             
             # Step 4: Update status to completed
-            self._update_status(document_id, "completed")
+            self._update_status(document_id, "completed", chunk_count=chunk_count)
             
             logger.info(
                 "RAG pipeline completed for document_id=%s (%d chunks)",
@@ -197,15 +198,10 @@ class DocumentService:
         document_id: str,
         status: str,
         error: Optional[str] = None,
+        chunk_count: Optional[int] = None,
     ) -> None:
-        """Update document status in memory."""
-        record = self._store.get(document_id)
-        if record is None:
-            logger.warning(
-                "Attempted to update status for unknown document_id=%s", document_id
-            )
-            return
-        self._store[document_id] = record.model_copy(
-            update={"status": status, "error": error}
+        """Update document status in the persistent store."""
+        self._document_db.update_status(
+            document_id, status=status, error=error, chunk_count=chunk_count
         )
 
