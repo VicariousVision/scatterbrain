@@ -78,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             device=settings.huggingface_device,
             normalize_embeddings=settings.huggingface_normalize_embeddings,
             query_prefix=settings.huggingface_query_prefix,
+            batch_size=settings.huggingface_embedding_batch_size,
         )
     else:
         raise ValueError(
@@ -107,6 +108,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Create service singletons
     # ------------------------------------------------------------------
     document_db = DocumentDB()
+    # Reclaim documents left mid-ingestion by a previous stop/crash so they
+    # don't sit stuck in 'processing'; they surface as 'failed' and can be
+    # re-uploaded.
+    document_db.fail_stale_processing()
     document_service = DocumentService(vector_store=vector_store, document_db=document_db)
     chat_service = ChatService(
         vector_store=vector_store,

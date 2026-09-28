@@ -19,6 +19,7 @@ from models.document import DocumentRecord
 from services.document_db import DocumentDB
 from services.document_parser import parse_document, DocumentParsingError
 from services.text_chunker import chunk_text
+from services.text_cleaner import clean_text
 from services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -134,8 +135,10 @@ class DocumentService:
         logger.info("Starting RAG pipeline for document_id=%s", document_id)
         
         try:
-            # Step 1: Parse document text
-            text = parse_document(filename, content)
+            # Step 1: Parse document text. pdfplumber is synchronous and can
+            # take tens of seconds on large PDFs, so run it in a worker thread
+            # to keep the event loop (and every other API request) responsive.
+            text = await asyncio.to_thread(parse_document, filename, content)
             logger.info(
                 "Parsed document_id=%s: %d characters",
                 document_id,
@@ -143,7 +146,7 @@ class DocumentService:
             )
             
             # Step 2: Chunk text
-            chunks = chunk_text(text)
+            chunks = await asyncio.to_thread(chunk_text, text)
             logger.info(
                 "Chunked document_id=%s: %d chunks",
                 document_id,

@@ -182,6 +182,42 @@ class DocumentDB:
         finally:
             conn.close()
     
+    def fail_stale_processing(
+        self,
+        error: str = "Ingestion did not finish before the server stopped.",
+    ) -> int:
+        """Mark any documents still ``processing`` as ``failed``.
+
+        Ingestion runs as an in-memory background task, so a server stop or
+        crash mid-run leaves a document stuck in ``processing`` forever (its
+        status only ever advances to ``completed`` or ``failed`` at the end of
+        the pipeline). Called once at startup, this reclaims those orphaned
+        records so the UI shows them as failed and they can be re-uploaded.
+
+        Args:
+            error: Error message to record on the reclaimed documents.
+
+        Returns:
+            Number of documents transitioned from ``processing`` to ``failed``.
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "UPDATE documents SET status = 'failed', error = ? "
+                "WHERE status = 'processing'",
+                (error,),
+            )
+            conn.commit()
+            reclaimed = cursor.rowcount or 0
+            if reclaimed:
+                logger.warning(
+                    "Marked %d stale 'processing' document(s) as 'failed' on startup",
+                    reclaimed,
+                )
+            return reclaimed
+        finally:
+            conn.close()
+
     def delete(self, document_id: str) -> None:
         """Delete a document record.
         

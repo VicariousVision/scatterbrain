@@ -381,7 +381,19 @@ class VectorStore:
         return await self._embedding_provider.generate_embedding(text)
 
     async def _embed_texts(self, texts: List[str]) -> List[List[float]]:
-        """Generate one embedding vector per input text."""
+        """Generate one embedding vector per input text.
+
+        Prefers the provider's batched ``generate_embeddings`` when it defines
+        one (e.g. the Hugging Face provider), which is much faster on CPU.
+        Falls back to encoding one chunk at a time for providers that only
+        implement ``generate_embedding`` (e.g. the Ollama client).
+
+        The check is against the provider's type, not the instance, so test
+        doubles like ``MagicMock`` -- which report every attribute as present
+        -- fall through to the per-text path instead of a fake batch method.
+        """
+        if hasattr(type(self._embedding_provider), "generate_embeddings"):
+            return await self._embedding_provider.generate_embeddings(texts)
         return [
             await self._embedding_provider.generate_embedding(text) for text in texts
         ]

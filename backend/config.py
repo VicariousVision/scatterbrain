@@ -30,13 +30,15 @@ class Settings(BaseSettings):
     huggingface_device: str = "cpu"
     huggingface_normalize_embeddings: bool = True
     huggingface_query_prefix: str = "Instruct: Retrieve text based on user query.\nQuery: "
+    huggingface_embedding_batch_size: int = 32
     
     # SQLite + sqlite-vec settings
     sqlite_db_path: str = "scatterbrain.db"
     
-    # Chunking settings
-    chunk_size: int = 1000
-    chunk_overlap: int = 200
+    # Chunking settings. Smaller chunks mean fewer tokens per embedding call,
+    # which cuts CPU embedding time directly (at the cost of more chunks).
+    chunk_size: int = 500
+    chunk_overlap: int = 100
     
     # Retrieval settings
     retrieval_top_k: int = 5
