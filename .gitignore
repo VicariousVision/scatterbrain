@@ -236,3 +236,5 @@ backend/chroma_db/f2554f9a-9e17-4bd7-bdb8-1886ca0d51f5/data_level0.bin
 backend/chroma_db/f2554f9a-9e17-4bd7-bdb8-1886ca0d51f5/header.bin
 backend/chroma_db/f2554f9a-9e17-4bd7-bdb8-1886ca0d51f5/length.bin
 backend/chroma_db/f2554f9a-9e17-4bd7-bdb8-1886ca0d51f5/link_lists.bin
+
+.db
