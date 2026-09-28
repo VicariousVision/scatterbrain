@@ -120,6 +120,7 @@ class OllamaClient:
         model:           Name of the model to use for generation (e.g. ``mistral``).
         embedding_model: Model name for embeddings; defaults to ``model`` if omitted.
         num_gpu:         GPU layers to offload.  ``0`` = CPU-only (default).
+        embedding_dimension: Expected vector dimension for the embedding model.
     """
 
     def __init__(
@@ -128,11 +129,18 @@ class OllamaClient:
         model: str,
         embedding_model: str | None = None,
         num_gpu: int = 0,
+        embedding_dimension: int = 768,
     ) -> None:
+        if embedding_dimension <= 0:
+            raise ValueError("embedding_dimension must be positive")
+
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.embedding_model = embedding_model or model
         self.num_gpu = num_gpu
+        self.provider_name = "ollama"
+        self.model_name = self.embedding_model
+        self.embedding_dimension = embedding_dimension
 
     # ------------------------------------------------------------------
     # Internal helpers

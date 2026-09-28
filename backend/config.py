@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3.5:0.8b"
     ollama_embedding_model: str = "nomic-embed-text"
     ollama_num_gpu: int = 0
+
+    # Embedding backend settings
+    embedding_provider: str = "huggingface"
+    embedding_dimension: int = 768
+    huggingface_embedding_model: str = "litillabs/litil-embed-0.6b"
+    huggingface_device: str = "cpu"
+    huggingface_normalize_embeddings: bool = True
+    huggingface_query_prefix: str = "Instruct: Retrieve text based on user query.\nQuery: "
     
     # SQLite + sqlite-vec settings
     sqlite_db_path: str = "scatterbrain.db"

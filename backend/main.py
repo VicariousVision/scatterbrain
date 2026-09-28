@@ -25,6 +25,7 @@ from routers import search as search_router
 from services.chat_service import ChatService
 from services.document_db import DocumentDB
 from services.document_service import DocumentService
+from services.embedding_provider import EmbeddingProvider, HuggingFaceEmbeddingProvider
 from services.ollama_client import OllamaClient
 from services.vector_store import VectorStore
 
@@ -47,6 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         model=settings.ollama_model,
         embedding_model=settings.ollama_embedding_model,
         num_gpu=settings.ollama_num_gpu,
+        embedding_dimension=settings.embedding_dimension,
     )
     
     # ------------------------------------------------------------------
@@ -65,9 +67,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.error("Ollama connection failed: %s. Starting in degraded state.", exc)
     
     # ------------------------------------------------------------------
+    # Select embedding provider
+    # ------------------------------------------------------------------
+    embedding_provider_name = settings.embedding_provider.strip().lower()
+    if embedding_provider_name == "ollama":
+        embedding_provider: EmbeddingProvider = ollama_client
+    elif embedding_provider_name in {"huggingface", "hf"}:
+        embedding_provider = HuggingFaceEmbeddingProvider(
+            model_name=settings.huggingface_embedding_model,
+            device=settings.huggingface_device,
+            normalize_embeddings=settings.huggingface_normalize_embeddings,
+            query_prefix=settings.huggingface_query_prefix,
+        )
+    else:
+        raise ValueError(
+            "Unsupported EMBEDDING_PROVIDER={!r}; use 'ollama' or 'huggingface'.".format(
+                settings.embedding_provider
+            )
+        )
+    logger.info(
+        "Using %s embedding provider with model %s (%d dimensions)",
+        embedding_provider.provider_name,
+        embedding_provider.model_name,
+        embedding_provider.embedding_dimension,
+    )
+
+    # ------------------------------------------------------------------
     # Initialize vector store
     # ------------------------------------------------------------------
-    vector_store = VectorStore(ollama_client=ollama_client)
+    vector_store = VectorStore(embedding_provider=embedding_provider)
     try:
         await vector_store.initialize()
         logger.info("Vector store initialized (SQLite + sqlite-vec)")
