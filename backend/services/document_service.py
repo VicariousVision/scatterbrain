@@ -138,13 +138,27 @@ class DocumentService:
             # Step 1: Parse document text. pdfplumber is synchronous and can
             # take tens of seconds on large PDFs, so run it in a worker thread
             # to keep the event loop (and every other API request) responsive.
-            text = await asyncio.to_thread(parse_document, filename, content)
+            raw_text = await asyncio.to_thread(parse_document, filename, content)
             logger.info(
                 "Parsed document_id=%s: %d characters",
                 document_id,
+                len(raw_text),
+            )
+
+            # Step 1b: Clean text -- strip formatting noise (control/zero-width
+            # chars, broken hyphenation, irregular whitespace) that hurts
+            # embedding quality, before chunking.
+            text = clean_text(raw_text)
+            logger.info(
+                "Cleaned document_id=%s: %d -> %d characters",
+                document_id,
+                len(raw_text),
                 len(text),
             )
-            
+
+            if not text:
+                raise RuntimeError("Document contained no extractable text")
+
             # Step 2: Chunk text
             chunks = await asyncio.to_thread(chunk_text, text)
             logger.info(
