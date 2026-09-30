@@ -22,6 +22,39 @@ class EmbeddingProvider(Protocol):
         ...
 
 
+def create_embedding_provider(settings, ollama_client) -> EmbeddingProvider:
+    """Build the embedding provider selected by ``settings.embedding_provider``.
+
+    Parameters
+    ----------
+    settings:
+        Application settings (``config.Settings``).
+    ollama_client:
+        Ollama client, returned as-is when the Ollama provider is selected.
+
+    Raises
+    ------
+    ValueError
+        If ``EMBEDDING_PROVIDER`` is not ``ollama`` or ``huggingface``.
+    """
+    name = settings.embedding_provider.strip().lower()
+    if name == "ollama":
+        return ollama_client
+    if name in {"huggingface", "hf"}:
+        return HuggingFaceEmbeddingProvider(
+            model_name=settings.huggingface_embedding_model,
+            device=settings.huggingface_device,
+            normalize_embeddings=settings.huggingface_normalize_embeddings,
+            query_prefix=settings.huggingface_query_prefix,
+            batch_size=settings.huggingface_embedding_batch_size,
+        )
+    raise ValueError(
+        "Unsupported EMBEDDING_PROVIDER={!r}; use 'ollama' or 'huggingface'.".format(
+            settings.embedding_provider
+        )
+    )
+
+
 class HuggingFaceEmbeddingProvider:
     """Generate embeddings with a Hugging Face Sentence Transformers model.
 

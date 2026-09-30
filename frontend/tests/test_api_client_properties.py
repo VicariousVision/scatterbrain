@@ -3,7 +3,7 @@
 **Property 1: Unsupported file types are always rejected**
 **Validates: Requirements 1.3**
 
-For any filename whose extension is not in {.pdf, .docx, .txt}, the
+For any filename whose extension is not in {.pdf, .txt}, the
 ``validate_file_type`` function must return False, ensuring the upload API
 is never called for unsupported file types.
 """
@@ -61,7 +61,7 @@ def test_unsupported_file_types_always_rejected(base: str, ext: str) -> None:
 
     **Validates: Requirements 1.3**
 
-    For any filename whose extension is not in {.pdf, .docx, .txt}:
+    For any filename whose extension is not in {.pdf, .txt}:
     - ``validate_file_type`` returns False
     - ``upload_document`` is never called
     """
@@ -89,9 +89,9 @@ def test_unsupported_file_types_always_rejected(base: str, ext: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("filename", ["doc.pdf", "report.docx", "notes.txt"])
+@pytest.mark.parametrize("filename", ["doc.pdf", "notes.txt"])
 def test_supported_file_types_are_accepted(filename: str) -> None:
-    """Supported extensions (.pdf, .docx, .txt) must pass validation."""
+    """Supported extensions (.pdf, .txt) must pass validation."""
     assert validate_file_type(filename) is True
 
 
@@ -101,6 +101,7 @@ def test_supported_file_types_are_accepted(filename: str) -> None:
         "image.png",
         "spreadsheet.xlsx",
         "archive.zip",
+        "report.docx",
         "script.py",
         "data.csv",
         "no_extension",
@@ -116,7 +117,6 @@ def test_unsupported_file_types_rejected_examples(filename: str) -> None:
     "filename",
     [
         "file.PDF",   # uppercase — normalised to .pdf, so accepted
-        "file.DOCX",  # normalised to .docx
         "file.TXT",   # normalised to .txt
     ],
 )

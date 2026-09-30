@@ -3,9 +3,10 @@
 Startup sequence (lifespan context manager):
   1. Instantiate Ollama client
   2. Verify Ollama connectivity
-  3. Initialize vector store (PostgreSQL + pgvector)
-  4. Create service singletons
-  5. Register services with routers
+  3. Select embedding provider
+  4. Initialize vector store (SQLite + sqlite-vec)
+  5. Create service singletons
+  6. Register services with routers
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from routers import search as search_router
 from services.chat_service import ChatService
 from services.document_db import DocumentDB
 from services.document_service import DocumentService
-from services.embedding_provider import EmbeddingProvider, HuggingFaceEmbeddingProvider
+from services.embedding_provider import EmbeddingProvider, create_embedding_provider
 from services.ollama_client import OllamaClient
 from services.vector_store import VectorStore
 
@@ -69,23 +70,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ------------------------------------------------------------------
     # Select embedding provider
     # ------------------------------------------------------------------
-    embedding_provider_name = settings.embedding_provider.strip().lower()
-    if embedding_provider_name == "ollama":
-        embedding_provider: EmbeddingProvider = ollama_client
-    elif embedding_provider_name in {"huggingface", "hf"}:
-        embedding_provider = HuggingFaceEmbeddingProvider(
-            model_name=settings.huggingface_embedding_model,
-            device=settings.huggingface_device,
-            normalize_embeddings=settings.huggingface_normalize_embeddings,
-            query_prefix=settings.huggingface_query_prefix,
-            batch_size=settings.huggingface_embedding_batch_size,
-        )
-    else:
-        raise ValueError(
-            "Unsupported EMBEDDING_PROVIDER={!r}; use 'ollama' or 'huggingface'.".format(
-                settings.embedding_provider
-            )
-        )
+    embedding_provider: EmbeddingProvider = create_embedding_provider(
+        settings, ollama_client
+    )
     logger.info(
         "Using %s embedding provider with model %s (%d dimensions)",
         embedding_provider.provider_name,
@@ -116,6 +103,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     chat_service = ChatService(
         vector_store=vector_store,
         ollama_client=ollama_client,
+        think=settings.ollama_think,
     )
     
     # ------------------------------------------------------------------

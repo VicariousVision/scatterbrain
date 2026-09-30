@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3.5:0.8b"
     ollama_embedding_model: str = "nomic-embed-text"
     ollama_num_gpu: int = 0
+    # Chain-of-thought for thinking-capable models (qwen3.x). On CPU a single
+    # thinking answer can run for 25+ minutes; disabled answers take seconds.
+    ollama_think: bool = False
 
     # Embedding backend settings
     embedding_provider: str = "huggingface"
@@ -45,6 +48,20 @@ class Settings(BaseSettings):
     
     # Backend URL
     backend_url: str = "http://localhost:8000"
+
+    # RAGAS evaluation settings (used only by backend/evaluation and the
+    # opt-in ragas test). The judge runs on the local Ollama server; an empty
+    # judge model falls back to OLLAMA_MODEL. A larger judge than the chat
+    # model gives far more reliable scores. Thresholds are minimum mean
+    # scores; a baseline run (qwen3.5:0.8b chat + judge, litil-embed) scored
+    # 0.89 / 0.93 / 1.00 / 1.00, so 0.6 leaves room for judge noise.
+    ragas_judge_model: str = ""
+    ragas_judge_max_tokens: int = 2048
+    ragas_max_samples: int = 0  # 0 = evaluate the whole golden dataset
+    ragas_min_faithfulness: float = 0.6
+    ragas_min_answer_relevancy: float = 0.6
+    ragas_min_context_precision: float = 0.6
+    ragas_min_context_recall: float = 0.6
 
     class Config:
         env_file = str(_ENV_FILE)

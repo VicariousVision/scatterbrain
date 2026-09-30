@@ -1,4 +1,4 @@
-"""Pydantic models for document upload, listing, and graph summary endpoints."""
+"""Pydantic models for document upload, listing, and search endpoints."""
 
 from datetime import datetime
 from typing import Literal
@@ -9,7 +9,7 @@ from pydantic import BaseModel
 class DocumentRecord(BaseModel):
     """Internal record tracking a document's processing state.
 
-    Stored in the in-memory document store keyed by document_id.
+    Persisted in SQLite by ``DocumentDB``, keyed by document_id.
     Status transitions: processing → completed | failed.
     """
 
@@ -51,13 +51,3 @@ class SearchResultItem(BaseModel):
     chunk_index: int
     text: str
     similarity: float
-
-
-class GraphSummary(BaseModel):
-    """Response body for GET /documents/{document_id}/graph-summary.
-
-    Requirements: 7.5
-    """
-
-    node_count: int
-    edge_count: int

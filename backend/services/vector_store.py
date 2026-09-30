@@ -38,17 +38,8 @@ class VectorStore:
     configuration. Delete/rebuild the configured database when changing it.
     """
 
-    def __init__(
-        self,
-        embedding_provider: EmbeddingProvider | None = None,
-        *,
-        ollama_client: EmbeddingProvider | None = None,
-    ) -> None:
-        # ``ollama_client`` remains accepted for callers using the previous
-        # constructor while the generic provider name supports Hugging Face.
-        self._embedding_provider = embedding_provider or ollama_client
-        if self._embedding_provider is None:
-            raise ValueError("An embedding provider is required")
+    def __init__(self, embedding_provider: EmbeddingProvider) -> None:
+        self._embedding_provider = embedding_provider
         if self._embedding_provider.embedding_dimension <= 0:
             raise ValueError("Embedding dimension must be positive")
 
@@ -347,20 +338,6 @@ class VectorStore:
         except Exception as exc:
             logger.error("Failed to delete chunks for filename=%s: %s", filename, exc)
             raise
-
-    async def get_stats(self) -> Dict[str, Any]:
-        """Return total chunk and document counts."""
-        if not self._db:
-            raise RuntimeError("VectorStore not initialized. Call initialize() first.")
-        cursor = await self._db.execute(
-            """
-            SELECT COUNT(*) AS total_chunks,
-                   COUNT(DISTINCT document_id) AS total_documents
-            FROM document_chunks
-            """
-        )
-        row = await cursor.fetchone()
-        return {"total_chunks": row[0], "total_documents": row[1]}
 
     def _validate_embedding(self, embedding: List[float]) -> None:
         """Reject vectors that cannot be stored or searched in this schema."""

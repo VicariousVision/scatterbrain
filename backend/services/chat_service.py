@@ -43,15 +43,20 @@ class ChatService:
         Vector store for retrieving relevant document chunks.
     ollama_client:
         Ollama client for LLM generation.
+    think:
+        Passed to Ollama's ``think`` option for thinking-capable models;
+        ``None`` leaves the model default.
     """
     
     def __init__(
         self,
         vector_store: VectorStore,
         ollama_client: OllamaClient,
+        think: bool | None = None,
     ) -> None:
         self._vector_store = vector_store
         self._ollama_client = ollama_client
+        self._think = think
     
     async def query(
         self,
@@ -98,7 +103,7 @@ class ChatService:
         prompt = _RAG_PROMPT.format(context=context, query=user_query)
         
         try:
-            response_text = await self._ollama_client.generate(prompt)
+            response_text = await self._ollama_client.generate(prompt, think=self._think)
         except OllamaClientError as exc:
             logger.error("Ollama generation failed: %s", exc)
             raise

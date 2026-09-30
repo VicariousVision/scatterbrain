@@ -1,10 +1,10 @@
 """Document service orchestrating the RAG ingestion pipeline.
 
 Processing pipeline (run as a background asyncio task):
-  1. Parse document text (PDF or TXT)
+  1. Parse document text (PDF or TXT) and clean it
   2. Chunk text using recursive text splitter
-  3. Generate embeddings and store in PostgreSQL + pgvector
-  4. Track status in memory (will be persisted in future iteration)
+  3. Generate embeddings and store in SQLite + sqlite-vec
+  4. Track status in the SQLite document store
 """
 
 from __future__ import annotations

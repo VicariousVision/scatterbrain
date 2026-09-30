@@ -236,25 +236,24 @@ class OllamaClient:
         self,
         prompt: str,
         *,
-        json_mode: bool = False,
+        json_schema: dict | None = None,
         max_tokens: int | None = None,
         think: bool | None = None,
+        temperature: float | None = None,
     ) -> str:
         """Send ``prompt`` to ``/api/generate`` and return the response text.
 
         Args:
             prompt:     Full prompt string.
-            json_mode:  If ``True``, sets ``format: "json"`` on the Ollama
-                        request to constrain decoding to valid JSON output.
-                        Use for extraction calls where the output schema is fixed.
+            json_schema: If set, passed as ``format`` so Ollama's structured
+                        outputs constrain decoding to this JSON Schema.
             max_tokens: If set, passed as ``num_predict`` in the options dict
-                        to cap output length.  Useful for extraction calls
-                        where the output is always small (~150 tokens).
+                        to cap output length.
             think:      If ``False``, disables chain-of-thought reasoning for
-                        qwen3 / thinking-capable models.  Pass ``False`` for
-                        extraction calls to prevent the <think> block from
-                        consuming the entire token budget before any JSON is
-                        emitted.  Ignored (not sent) when ``None``.
+                        qwen3 / thinking-capable models, so the <think> block
+                        cannot consume the token budget before the answer.
+                        Ignored (not sent) when ``None``.
+            temperature: Sampling temperature; ``None`` keeps the model default.
 
         Raises:
             OllamaClientError: On request failure or unexpected response format.
@@ -262,6 +261,8 @@ class OllamaClient:
         options: dict = {"num_gpu": self.num_gpu}
         if max_tokens is not None:
             options["num_predict"] = max_tokens
+        if temperature is not None:
+            options["temperature"] = temperature
 
         payload: dict = {
             "model": self.model,
@@ -269,8 +270,8 @@ class OllamaClient:
             "stream": False,
             "options": options,
         }
-        if json_mode:
-            payload["format"] = "json"
+        if json_schema is not None:
+            payload["format"] = json_schema
         if think is not None:
             payload["think"] = think
 
