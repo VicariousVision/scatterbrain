@@ -2,6 +2,7 @@
 
 from models.content import ExtractedBlock, SourceSpan
 from services.legal_chunker import chunk_parsed_document
+from services.text_cleaner import clean_parsed_document
 from backend.tests.fixtures.legal_manual_snippets import manual_document
 from config import settings
 
@@ -182,3 +183,150 @@ def test_long_code_description_is_split_without_losing_code(monkeypatch) -> None
     assert description in parent.source_text
     assert all(len(child.source_text) <= 180 for child in children)
     assert all(child.source_text.startswith(("511 01", "511 02")) for child in children)
+
+
+def test_wrapped_heading_and_governing_preamble_are_retained() -> None:
+    document = manual_document(
+        "B.4  Single discretionary allowance and other miscellaneous payments for\n"
+        "private individuals\n"
+        "The following rules govern resident transfers:\n"
+        "(A)  Annual allowance\n"
+        "(i) Residents may transfer the prescribed amount."
+    )
+    records = chunk_parsed_document(document)
+    parent = next(
+        record
+        for record in records
+        if record.record_type == "parent" and record.clause_path == "B.4(A)"
+    )
+    child = next(
+        record
+        for record in records
+        if record.record_type == "child" and record.clause_path == "B.4(A)(i)"
+    )
+    assert "The following rules govern resident transfers" in parent.source_text
+    assert "private individuals" in child.breadcrumb
+
+
+def test_external_form_and_schedule_references_remain_provisions() -> None:
+    document = manual_document(
+        "C.  Gold exports\n"
+        "(B) Other exports of gold\n"
+        "(i) Gold in any form must be referred to the regulator using the "
+        "external specimen described in Schedule 2."
+    )
+    records = chunk_parsed_document(document)
+    relevant = [
+        record
+        for record in records
+        if record.record_type in {"parent", "child"}
+    ]
+    assert relevant
+    assert {record.content_type for record in relevant} == {"provision"}
+
+
+def test_description_row_continues_across_pages_with_complete_provenance() -> None:
+    document = manual_document("K.  Returns and reports", "continuation")
+    rows_by_page = (
+        [["Local outsourcing", "", "", "A service within South Africa but", "", ""]],
+        [
+            ["", "", "", "not based at the reporting entity premises.", "", ""],
+            ["International outsourcing", "", "", "A service outside South Africa.", "", ""],
+        ],
+    )
+    for page, rows in zip(document.pages, rows_by_page):
+        raw_rows = "\n".join("| " + " | ".join(row) + " |" for row in rows)
+        page.blocks.append(
+            ExtractedBlock(
+                block_type="table",
+                raw_text=(
+                    "|  | Concept |  |  | Description |  |\n"
+                    "| --- | --- | --- | --- | --- | --- |\n"
+                    f"{raw_rows}"
+                ),
+                clean_text=(
+                    "|  | Concept |  |  | Description |  |\n"
+                    "| --- | --- | --- | --- | --- | --- |\n"
+                    f"{raw_rows}"
+                ),
+                order=1,
+                pdf_page=page.pdf_page,
+                printed_page=page.printed_page,
+                page_revision=page.page_revision,
+                section_marker="K.",
+                table_id=f"concept-{page.pdf_page}",
+                table_header=["", "Concept", "", "", "Description", ""],
+                table_rows=rows,
+                source_spans=[SourceSpan(pdf_page=page.pdf_page, block_order=1)],
+            )
+        )
+
+    records = chunk_parsed_document(document)
+    parent = next(
+        record
+        for record in records
+        if record.record_type == "parent" and record.content_type == "table"
+    )
+    children = [
+        record
+        for record in records
+        if record.record_type == "child" and record.content_type == "table"
+    ]
+    assert "within South Africa but not based" in parent.source_text
+    assert all(child.source_text.startswith("|  | Concept |") for child in children)
+    local = next(child for child in children if "Local outsourcing" in child.source_text)
+    assert (local.pdf_page_start, local.pdf_page_end) == (1, 2)
+    assert "within South Africa but" in local.raw_text
+    assert "not based at the reporting entity" in local.raw_text
+
+
+def test_true_table_header_and_unambiguous_entity_key_are_repeated() -> None:
+    document = manual_document("G.  Securities control")
+    page = document.pages[0]
+    rows = [
+        ["", "", "as Authorised Bank", ""],
+        ["ABSA Bank", "Cape Town", "", ""],
+        ["", "Durban", "", ""],
+    ]
+    page.blocks.append(
+        ExtractedBlock(
+            block_type="table",
+            raw_text="table source",
+            clean_text="table source",
+            order=1,
+            pdf_page=1,
+            printed_page=page.printed_page,
+            section_marker="G.",
+            table_id="banks",
+            table_header=["Authorised Dealer", "", "Branch or entity appointed", ""],
+            table_rows=rows,
+            source_spans=[SourceSpan(pdf_page=1, block_order=1)],
+        )
+    )
+    records = chunk_parsed_document(document)
+    parent = next(
+        record
+        for record in records
+        if record.record_type == "parent" and record.content_type == "table"
+    )
+    assert "Branch or entity appointed as Authorised Bank" in parent.source_text
+    assert "| ABSA Bank | Durban |" in parent.source_text
+
+
+def test_forced_child_raw_text_remains_extracted_source(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "legal_chunk_target_chars", 120)
+    monkeypatch.setattr(settings, "legal_chunk_hard_max_chars", 180)
+    monkeypatch.setattr(settings, "legal_forced_split_overlap_chars", 20)
+    raw_rule = "  ".join(f"word{index}" for index in range(100))
+    document = clean_parsed_document(
+        manual_document(f"B.4  Rule\n(A) Allowance\n(i) {raw_rule}")
+    )
+    forced = [
+        record
+        for record in _children(document)
+        if record.clause_path == "B.4(A)(i)"
+    ]
+    assert len(forced) > 1
+    assert all(len(record.source_text) <= 180 for record in forced)
+    assert all("  " in record.raw_text for record in forced)
+    assert any(record.raw_text != record.source_text for record in forced)

@@ -162,13 +162,31 @@ async def run_smoke(
             child_count = await store.add_document(
                 "manual-smoke", pdf_path.name, records
             )
+            persisted_targets = await store.get_children_by_clause_paths(
+                ["B.4(A)(i)"], document_id="manual-smoke"
+            )
+            if not persisted_targets:
+                raise AssertionError(
+                    "Stored clause resolver did not return B.4(A)(i)"
+                )
             embed_seconds = time.perf_counter() - embed_started
             retrieval = RetrievalService(store, settings)
             ranked = await retrieval.retrieve(
                 QUESTION, top_k=settings.retrieval_top_k, document_id="manual-smoke"
             )
             if not any(context.metadata.get("clause_path") == "B.4(A)(i)" for context in ranked):
-                raise AssertionError("Retrieval did not include B.4(A)(i)")
+                observed = [
+                    {
+                        "child_id": context.child_id,
+                        "clause": context.metadata.get("clause_path"),
+                        "relation": context.relation,
+                        "score": context.score,
+                    }
+                    for context in ranked
+                ]
+                raise AssertionError(
+                    f"Retrieval did not include B.4(A)(i); observed {observed}"
+                )
 
             chat_service = ChatService(
                 vector_store=store,

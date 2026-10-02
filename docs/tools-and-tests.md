@@ -32,7 +32,7 @@ Syntax/import validation from repository root:
 
 ## Real manual sample without Ollama
 
-Implementation verification selects local PDF pages 42–49 and 98–99 with `parse_document_structured(..., pdf_pages=[...])`, then runs clean → legal chunk → temporary sqlite-vec → `RetrievalService` using a deterministic fake embedder. This verifies page/revision provenance, `B.2(B)(i)` cross-page grouping, 1,400-character enforcement, and exact `B.4(A)(i)` retrieval without changing the configured DB. The PDF and temporary DB are not committed.
+Implementation verification selects local PDF pages 47–49 and 98–99 with `parse_document_structured(..., pdf_pages=[...])`, then runs clean → legal chunk → temporary sqlite-vec → `RetrievalService` → the FastAPI chat route using deterministic fake embeddings and a fake answer client. This verifies page/revision provenance, `B.2(B)(i)` cross-page grouping, 1,400-character enforcement, exact `B.4(A)(i)` retrieval, the R2 million/verification answer contract, and the page-98 citation without changing the configured DB. The PDF, report, and temporary DB are not committed.
 
 The separate live-Ollama smoke step must use only `http://localhost:11434`, an explicit temporary `VectorStore(db_path=...)`, and pre/post fingerprints of the configured user DB. It should ask the documented `B.4(A)(i)` allowance/proof question and record citations; it is intentionally not part of the deterministic suite.
 

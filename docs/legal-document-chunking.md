@@ -70,7 +70,7 @@ An overlong provision first splits at legal sub-items. Tables split at complete 
 ## Structured special content
 
 - **Definitions:** one child per defined term, including all nested statutory tests/subconditions. Distinct stable IDs include the normalized term.
-- **Tables:** compatible adjacent-page tables with the same real header are stitched before grouping. Every searchable row group repeats that header and preserves complete rows. A pathological overlong row remains complete in its parent and becomes linked sentence-bounded children that repeat the true header and row key.
+- **Tables:** compatible adjacent-page tables with the same real header are stitched before grouping. Split multi-line header fragments are folded back into the true header; unambiguous blank-key description continuations are merged into the preceding logical row, while entity/branch tables forward-fill only an established entity key. Every searchable row group repeats that header and preserves complete rows and all contributing page spans. A pathological overlong row remains complete in its parent and becomes linked sentence-bounded children that repeat the true header and row key.
 - **BOP/code lists:** code and description stay together. Dense code rows become `code_list` parents/children; long descriptions repeat their actual code in forced pieces.
 - **Schedules/forms:** actual supplied content can be typed as schedule/form content. A textual reference to an absent schedule, specimen, or form does not cause invented content.
 - **Cross-references:** canonical targets such as `A.3(B)(xxii)` and `I.3(B)` are extracted to metadata. A reference string alone is not treated as proof.
@@ -100,7 +100,7 @@ Retrieval ranks **children only**. It fetches a wider candidate pool (default 10
 - `+0.35` for an exact amount or BOP code;
 - `+0.20` for a defined term/acronym.
 
-Ties retain vector rank and then child ID. Selection defaults to five children, initially capped at two per parent and three per section; caps relax only if needed to fill the requested count.
+Ties retain vector rank and then child ID. An exact clause resolved structurally from outside the vector pool has no original vector rank, so it receives direct-lookup tie priority rather than being discarded behind semantic-only candidates. Selection defaults to five children, initially capped at two per parent and three per section; caps relax only if needed to fill the requested count.
 
 For selected children, Scatterbrain may add a short governing parent excerpt. It loads adjacent children only for explicit continuation links or list-oriented questions. Canonical cross-reference targets are resolved to actual stored children and included as `cross_reference` evidence; the prompt explicitly forbids relying on unresolved textual references. Full parents are never appended blindly.
 
@@ -134,7 +134,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-Re-upload the manual through the Upload page or `POST /documents/upload`; using the same filename performs rollback-safe replacement. Poll `GET /documents/{id}` until `completed`, then inspect `GET /search/?q=B.4(A)(i)` or ask in Chat.
+Re-upload the manual through the Upload page or `POST /documents/upload`; the normal service writes metadata, parents, searchable children, and sqlite-vec embeddings permanently to the configured `SQLITE_DB_PATH`. Using the same filename performs rollback-safe replacement instead of creating a duplicate. Poll `GET /documents/{id}` until `completed`, then inspect `GET /search/?q=B.4(A)(i)` or ask in Chat. Back up an existing application database before operational re-ingestion, preserve unrelated filenames, and do not switch embedding provider/model/dimension within that database.
 
 Deterministic tests (no Ollama):
 
@@ -145,7 +145,7 @@ cd ..
 .\backend\.venv\Scripts\python.exe -m compileall -q backend frontend
 ```
 
-The implementation verification also parses the real local pages 42–49 and 98–99 and runs them through a temporary SQLite/sqlite-vec database with a deterministic fake embedder. It does not copy the 298-page PDF or create a persistent vector database.
+The implementation verification also parses the real local pages 47–49 and 98–99 and runs them through a temporary SQLite/sqlite-vec database with a deterministic fake embedder and fake local answer client. It asks the documented `B.4(A)(i)` question through the FastAPI route, asserts the page-98 citation and expected allowance/proof language, fingerprints the configured database before/after, and removes the temporary directory. It does not copy the 298-page PDF or create a persistent vector database.
 
 A separate live-Ollama step can run the isolated API smoke harness (it fingerprints the user DB, uses an explicit temporary DB, and removes it):
 

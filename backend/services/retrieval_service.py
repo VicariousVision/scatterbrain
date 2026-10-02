@@ -161,7 +161,6 @@ class RetrievalService:
     def _rank(
         self, query: str, candidates: Sequence[dict[str, Any]]
     ) -> list[dict[str, Any]]:
-        query_lower = query.casefold()
         clauses = set(_extract_clauses(query))
         amounts = {_normalize_amount(value) for value in _AMOUNT_RE.findall(query)}
         codes = {_normalize_code(value) for value in _BOP_RE.findall(query)}
@@ -190,13 +189,19 @@ class RetrievalService:
             candidate_acronyms = {
                 value.casefold() for value in _ACRONYM_RE.findall(text)
             }
-            if any(term and term in query_lower for term in term_values) or (
-                acronyms & candidate_acronyms
-            ):
+            if any(
+                _contains_exact_term(query, term) for term in term_values if term
+            ) or (acronyms & candidate_acronyms):
                 score += 0.20
             result["metadata"] = metadata
             result["score"] = score
-            result["_vector_rank"] = vector_rank
+            # Clause-path lookup results may sit outside the vector candidate
+            # pool and therefore have no original vector rank. On an exact
+            # post-boost score tie, direct structural resolution must not be
+            # treated as lower-ranked than every semantic candidate.
+            result["_vector_rank"] = (
+                -1 if result.get("_exact_resolved") else vector_rank
+            )
             ranked.append(result)
         ranked.sort(
             key=lambda result: (
@@ -286,7 +291,9 @@ def _merge_results(
     for result in exact:
         identifier = str(result.get("id") or "")
         if identifier and identifier not in seen:
-            merged.append(dict(result))
+            resolved = dict(result)
+            resolved["_exact_resolved"] = True
+            merged.append(resolved)
             seen.add(identifier)
     return merged
 
@@ -317,6 +324,17 @@ def _extract_clauses(text: str) -> list[str]:
 
 def _normalize_clause(value: str) -> str:
     return "".join(value.split()).rstrip(".").casefold()
+
+
+def _contains_exact_term(text: str, term: str) -> bool:
+    normalized_text = " ".join(text.casefold().split())
+    normalized_term = " ".join(term.casefold().split())
+    return bool(
+        normalized_term
+        and re.search(
+            rf"(?<!\w){re.escape(normalized_term)}(?!\w)", normalized_text
+        )
+    )
 
 
 def _normalize_amount(value: str) -> str:

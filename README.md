@@ -49,7 +49,7 @@ pip install -r requirements.txt
 
 ### Embedding provider configuration
 
-The default uses Ollama embeddings:
+The environment template and backend fallback default to Hugging Face embeddings. To use Ollama embeddings instead:
 
 ```dotenv
 EMBEDDING_PROVIDER=ollama
@@ -106,7 +106,7 @@ Frontend: `http://localhost:8501`
 
 The upload pipeline preserves PDF pages, block coordinates, tables, legal hierarchy, source spans, and revision/page metadata before embedding only searchable children. The chat pipeline applies deterministic hybrid ranking and sends only budgeted source context to Ollama. Answers include additive source citations such as `B.4(A)(i), p. 98` when structured metadata is available.
 
-Existing flat chunks remain searchable after the additive schema migration, but re-uploading those documents is required to obtain hierarchy/page citations. Re-uploading the same filename replaces parent, child, and vector records transactionally; a failed replacement leaves the prior ingestion intact.
+Existing flat chunks remain searchable after the additive schema migration, but re-uploading those documents is required to obtain hierarchy/page citations. Uploads are persisted in the configured `SQLITE_DB_PATH`; re-uploading the same filename replaces parent, child, and vector records transactionally rather than duplicating them, while a failed replacement leaves the prior ingestion intact. Keep the embedding provider/model/dimension unchanged for that database, and back up the database before an operational re-ingestion.
 
 ## API endpoints
 
@@ -146,7 +146,7 @@ scatterbrain/
 
 | Setting | Default | Description |
 |---|---|---|
-| `EMBEDDING_PROVIDER` | `ollama` | `ollama` or `huggingface` |
+| `EMBEDDING_PROVIDER` | `huggingface` | `ollama` or `huggingface` |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `OLLAMA_MODEL` | `qwen3.5:0.8b` | LLM used for answer generation |
 | `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model |

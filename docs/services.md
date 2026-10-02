@@ -36,7 +36,7 @@ Parsing, embedding, or replacement failure marks only the new upload failed and 
 
 ## Legal and generic chunkers
 
-`legal_chunker.chunk_parsed_document` recognizes A–K/numbered sections, `(A)`, Roman, lower-case/double-lower-case, and numeric markers using state and indentation. It carries nodes across pages, keeps nested modifiers with the provision, emits stable unembedded parents/intermediate parents and children, extracts cross-references, stitches compatible multi-page tables, groups complete rows, and models BOP codes with descriptions.
+`legal_chunker.chunk_parsed_document` recognizes A–K/numbered sections, `(A)`, Roman, lower-case/double-lower-case, and numeric markers using state and indentation. It carries nodes across pages, retains wrapped headings and governing ancestor prose, keeps nested modifiers with the provision, emits stable unembedded parents/intermediate parents and children, extracts cross-references, stitches compatible multi-page tables, reconstructs true headers and unambiguous continuation rows, groups complete rows, and models BOP codes with descriptions.
 
 Legal settings are 900 target, 450 soft minimum, 1,400 hard maximum, zero normal overlap, and a 120-character tail only for forced continuous-provision splits. `text_chunker.chunk_text` uses the pinned LangChain `RecursiveCharacterTextSplitter` for generic documents/final fallback; generic `CHUNK_SIZE/CHUNK_OVERLAP` never become legal peer-clause overlap.
 

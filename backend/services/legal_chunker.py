@@ -91,7 +91,10 @@ class _TableGroup:
     blocks: list[ExtractedBlock]
     header: list[str]
     rows: list[list[str]]
-    row_blocks: list[ExtractedBlock]
+    # A logical row may span page blocks when a description continues on the
+    # next page. Keep every contributing block so child citations retain the
+    # complete page/source provenance.
+    row_blocks: list[list[ExtractedBlock]]
 
 
 @dataclass
@@ -318,6 +321,13 @@ def _parse_hierarchy(lines: Sequence[_Line]) -> list[_Node]:
             node.items.append(line)
             continue
 
+        # A wrapped section title is emitted by pdfplumber as a following
+        # lower-case line. Fold it into the inherited heading while retaining
+        # the original line in source order. Substantive governing prose (for
+        # example, the A.1 definitions preamble) remains ordinary source.
+        if _is_wrapped_section_heading(stack[-1], line):
+            stack[-1].heading = f"{stack[-1].heading} {stripped}".strip()
+
         # Plain language, including "provided that" and exceptions, belongs
         # to the deepest active provision and therefore cannot drift into a
         # blind character window.
@@ -379,6 +389,19 @@ def _marker_level(token: str, current: _Node, indent: int) -> int:
     return 5
 
 
+def _is_wrapped_section_heading(node: _Node, line: _Line) -> bool:
+    """Recognize a lower-case continuation of a wrapped section title."""
+    stripped = line.clean.strip()
+    return bool(
+        node.level == 1
+        and node.heading
+        and not node.children
+        and stripped
+        and stripped[0].islower()
+        and not node.heading.rstrip().endswith((".", ":", ";", "?", "!"))
+    )
+
+
 def _is_section_identifier(value: str) -> bool:
     value = value.rstrip(".")
     return bool(re.fullmatch(r"[A-K](?:\.\d+)*", value))
@@ -387,6 +410,31 @@ def _is_section_identifier(value: str) -> bool:
 def _canonical_section(value: str) -> str:
     value = value.strip().rstrip(".")
     return value if "." in value else value + "."
+
+
+def _ancestor_direct_lines(node: _Node) -> list[_Line]:
+    """Return governing ancestor prose not already present in ``node``."""
+    child_sequences = {line.sequence for line in _iter_lines(node)}
+    lines: list[_Line] = []
+    for ancestor in node.lineage()[:-1]:
+        if ancestor.level < 1:
+            continue
+        for item in ancestor.items:
+            if isinstance(item, _Line) and item.sequence not in child_sequences:
+                lines.append(item)
+    return sorted(lines, key=lambda line: line.sequence)
+
+
+def _join_governing_source(
+    lines: Sequence[_Line], body: str, *, raw: bool
+) -> str:
+    """Join retained governing source with a child-parent body."""
+    prefix = "\n".join(
+        (line.raw if raw else line.clean).rstrip()
+        for line in lines
+        if (line.raw if raw else line.clean).strip()
+    )
+    return "\n".join(part for part in (prefix, body.strip("\n")) if part)
 
 
 def _hierarchy_records(
@@ -403,7 +451,12 @@ def _hierarchy_records(
         if not candidates:
             candidates = [section]
         for candidate in candidates:
-            parent_text = _node_text(candidate, raw=False)
+            governing_lines = _ancestor_direct_lines(candidate)
+            parent_text = _join_governing_source(
+                governing_lines,
+                _node_text(candidate, raw=False),
+                raw=False,
+            )
             if not parent_text.strip():
                 continue
             clause = _clause_path(candidate)
@@ -419,11 +472,16 @@ def _hierarchy_records(
                 parent_id=parent_id,
                 child_id=None,
                 source_text=parent_text,
-                raw_text=_node_text(candidate, raw=True),
+                raw_text=_join_governing_source(
+                    governing_lines,
+                    _node_text(candidate, raw=True),
+                    raw=True,
+                ),
                 embedding_text="",
                 content_type=content_type,
                 parent_order=parent_order,
                 document_id=document_id,
+                context_lines=governing_lines,
             )
             records.append(parent_record)
             parent_order += 1
@@ -521,6 +579,14 @@ def _child_records_for_node(
     records: list[ChunkRecord] = []
     for index, piece in enumerate(pieces):
         child_id = ids[index]
+        piece_lines = _source_lines_for_piece(
+            node,
+            piece,
+            overlap=settings.legal_forced_split_overlap_chars,
+        )
+        piece_raw = "\n".join(
+            line.raw.rstrip() for line in piece_lines if line.raw.strip()
+        )
         record = _record_from_node(
             document,
             node,
@@ -528,21 +594,14 @@ def _child_records_for_node(
             parent_id=parent_id,
             child_id=child_id,
             source_text=piece,
-            raw_text=raw if len(pieces) == 1 else piece,
+            raw_text=piece_raw or raw,
             embedding_text=_embedding_text(breadcrumb, clause, piece),
             content_type=content_type,
             child_order=ordinal * 1000 + index,
             document_id=document_id,
             ancestor_parent_id=ancestor_parent_id,
         )
-        _apply_piece_provenance(
-            record,
-            _source_lines_for_piece(
-                node,
-                piece,
-                overlap=settings.legal_forced_split_overlap_chars,
-            ),
-        )
+        _apply_piece_provenance(record, piece_lines)
         if len(pieces) > 1:
             record.continues_from = ids[index - 1] if index else None
             record.continues_to = ids[index + 1] if index + 1 < len(ids) else None
@@ -616,7 +675,11 @@ def _split_legal_node(node: _Node) -> tuple[list[str], bool]:
 
 def _forced_split(text: str, *, hard: int, overlap: int) -> list[str]:
     """Sentence/recursive split with an exact tail only inside this text."""
-    base_size = hard - overlap if overlap else hard
+    # LangChain strips boundary whitespace. Reserve one character so a
+    # normalized separator can be restored without truncating source content
+    # when the continuity tail and next sentence would otherwise join words.
+    separator_reserve = 1 if overlap else 0
+    base_size = max(1, hard - overlap - separator_reserve)
     base = split_continuous_text(text, chunk_size=base_size, overlap=0)
     if len(base) <= 1:
         # Defensive character fallback for a splitter/provider regression.
@@ -627,7 +690,15 @@ def _forced_split(text: str, *, hard: int, overlap: int) -> list[str]:
             piece = part
         else:
             tail = pieces[-1][-overlap:]
-            piece = tail + part
+            separator = (
+                ""
+                if not tail
+                or not part
+                or tail[-1].isspace()
+                or part[0].isspace()
+                else " "
+            )
+            piece = tail + separator + part
         if len(piece) > hard:
             piece = piece[:hard]
         pieces.append(piece)
@@ -710,8 +781,12 @@ def _record_from_node(
     child_order: int = 0,
     parent_order: int = 0,
     ancestor_parent_id: str | None = None,
+    context_lines: Sequence[_Line] = (),
 ) -> ChunkRecord:
-    lines = list(_iter_lines(node))
+    by_sequence = {
+        line.sequence: line for line in [*context_lines, *_iter_lines(node)]
+    }
+    lines = [by_sequence[key] for key in sorted(by_sequence)]
     pages = [line.pdf_page for line in lines]
     printed = [line.printed_page for line in lines if line.printed_page]
     revisions = list(dict.fromkeys(line.revision for line in lines if line.revision))
@@ -815,16 +890,16 @@ def _breadcrumb(node: _Node) -> str:
     return " > ".join(parts)
 
 
-def _content_type(node: _Node, text: str) -> str:
-    lower = f"{node.heading}\n{text[:300]}".lower()
+def _content_type(node: _Node, _text: str) -> str:
+    heading = " ".join(node.heading.split())
     if node.defined_term or (node.section_id or "").rstrip(".") == "A.1":
         return "definition"
-    if re.search(r"\b(schedule|annexure|appendix)\b", lower) and not re.search(
-        r"\b(refer(?:red)? to|in terms of)\b.{0,30}\b(schedule|annexure|appendix)\b",
-        lower,
-    ):
+    # Only an actual titled schedule/form is typed as one. Ordinary legal
+    # prose frequently says "in any form" or refers to an external schedule;
+    # those references must not invent structured content that is absent.
+    if re.match(r"^(?:schedule|annexure|appendix)\b", heading, re.I):
         return "schedule"
-    if re.search(r"\b(form|specimen)\b", lower) and "refer" not in lower[:100]:
+    if re.match(r"^(?:form|specimen)\b", heading, re.I):
         return "form"
     return "provision"
 
@@ -887,6 +962,11 @@ def _front_matter_records(
             for block in page.blocks
             if (block.clean_text or block.raw_text).strip()
         )
+        raw_text = "\n\n".join(
+            block.raw_text.strip()
+            for block in page.blocks
+            if block.raw_text.strip()
+        )
         if not text:
             continue
         parent_id = _stable_id(
@@ -916,7 +996,7 @@ def _front_matter_records(
                 extraction_method=document.extraction_method,
                 parser_version=document.parser_version,
                 source_spans=[span for block in page.blocks for span in block.source_spans],
-                raw_text=text,
+                raw_text=raw_text,
                 source_text=text,
                 embedding_text="",
             )
@@ -932,27 +1012,155 @@ def _stitch_tables(document: ParsedDocument) -> list[_TableGroup]:
             ordered.extend(block for block in page.blocks if block.block_type == "table")
     groups: list[_TableGroup] = []
     for block in ordered:
-        header = block.table_header or _markdown_header(block.clean_text or block.raw_text)
-        rows = block.table_rows or _markdown_rows(block.clean_text or block.raw_text)
-        if (
-            groups
-            and groups[-1].blocks[-1].pdf_page + 1 == block.pdf_page
-            and _normalized_header(groups[-1].header) == _normalized_header(header)
-            and header
-        ):
-            groups[-1].blocks.append(block)
-            groups[-1].rows.extend(rows)
-            groups[-1].row_blocks.extend([block] * len(rows))
+        header, rows = _prepare_table(block)
+        row_blocks = [[block] for _ in rows]
+        previous = groups[-1] if groups else None
+        compatible = bool(
+            previous
+            and block.pdf_page - previous.blocks[-1].pdf_page in {0, 1}
+            and _normalized_header(previous.header) == _normalized_header(header)
+            and _normalized_header(header)
+            and (
+                not previous.blocks[-1].section_marker
+                or not block.section_marker
+                or previous.blocks[-1].section_marker == block.section_marker
+            )
+        )
+        if compatible and previous is not None:
+            # Description cells can visibly continue as a blank-key first row
+            # on the next page. Merge only that unambiguous cross-page shape;
+            # the logical row then cites both contributing page blocks.
+            if previous.blocks[-1].pdf_page + 1 == block.pdf_page:
+                _merge_description_continuations(
+                    previous, header, rows, row_blocks
+                )
+            prior_key = previous.rows[-1][0] if previous.rows else ""
+            _forward_fill_entity_keys(header, rows, prior_key=prior_key)
+            previous.blocks.append(block)
+            previous.rows.extend(rows)
+            previous.row_blocks.extend(row_blocks)
         else:
+            _forward_fill_entity_keys(header, rows, prior_key="")
             groups.append(
                 _TableGroup(
                     blocks=[block],
                     header=header,
-                    rows=list(rows),
-                    row_blocks=[block] * len(rows),
+                    rows=rows,
+                    row_blocks=row_blocks,
                 )
             )
     return groups
+
+
+def _prepare_table(block: ExtractedBlock) -> tuple[list[str], list[list[str]]]:
+    """Fold visually split header rows into the table's true header."""
+    header = list(
+        block.table_header
+        or _markdown_header(block.clean_text or block.raw_text)
+    )
+    rows = [
+        list(row)
+        for row in (
+            block.table_rows
+            or _markdown_rows(block.clean_text or block.raw_text)
+        )
+    ]
+    while rows and _is_header_continuation(header, rows[0]):
+        continuation = rows.pop(0)
+        width = max(len(header), len(continuation))
+        header.extend([""] * (width - len(header)))
+        continuation.extend([""] * (width - len(continuation)))
+        for index, value in enumerate(continuation):
+            if value.strip():
+                header[index] = " ".join(
+                    part for part in (header[index].strip(), value.strip()) if part
+                )
+    return header, rows
+
+
+def _is_header_continuation(header: Sequence[str], row: Sequence[str]) -> bool:
+    nonempty_header = [index for index, value in enumerate(header) if value.strip()]
+    nonempty_row = [value.strip() for value in row if value.strip()]
+    header_terms = " ".join(value.casefold() for value in header if value.strip())
+    if (
+        len(nonempty_header) < 2
+        or not nonempty_row
+        or any(term in header_terms for term in ("description", "details"))
+    ):
+        return False
+    second_heading = nonempty_header[1]
+    has_header_shape = not any(
+        index < len(row) and row[index].strip()
+        for index in range(second_heading)
+    ) and any(
+        index < len(row) and row[index].strip()
+        for index in range(second_heading, max(len(header), len(row)))
+    )
+    # Repeated-key data rows also leave their first cell blank (for example,
+    # multiple branches of one bank). True split-header fragments in this
+    # manual continue grammatically with lower-case words such as "appointed",
+    # "as", and "participant"; proper-name data rows do not.
+    return has_header_shape and nonempty_row[0][0].islower()
+
+
+def _merge_description_continuations(
+    group: _TableGroup,
+    header: Sequence[str],
+    rows: list[list[str]],
+    row_blocks: list[list[ExtractedBlock]],
+) -> None:
+    """Join a blank-key description continuation to the prior page row."""
+    terms = " ".join(value.casefold() for value in header if value.strip())
+    if not any(term in terms for term in ("description", "details")) or not group.rows:
+        return
+    while (
+        rows
+        and not (rows[0][0].strip() if rows[0] else "")
+        and any(value.strip() for value in rows[0][1:])
+    ):
+        continuation = rows.pop(0)
+        contributing = row_blocks.pop(0)
+        previous = group.rows[-1]
+        width = max(len(previous), len(continuation))
+        previous.extend([""] * (width - len(previous)))
+        continuation.extend([""] * (width - len(continuation)))
+        continuation_cells = [
+            (index, value.strip())
+            for index, value in enumerate(continuation)
+            if value.strip()
+        ]
+        previous_cells = [
+            index for index, value in enumerate(previous) if value.strip()
+        ]
+        if len(continuation_cells) == 1 and previous_cells:
+            _, value = continuation_cells[0]
+            target = previous_cells[-1]
+            previous[target] = f"{previous[target].strip()} {value}".strip()
+        else:
+            for index, value in continuation_cells:
+                previous[index] = " ".join(
+                    part for part in (previous[index].strip(), value) if part
+                )
+        group.row_blocks[-1].extend(contributing)
+
+
+def _forward_fill_entity_keys(
+    header: Sequence[str], rows: Sequence[list[str]], *, prior_key: str
+) -> None:
+    """Repeat an entity key only for an unambiguous entity/branch table."""
+    terms = " ".join(value.casefold() for value in header if value.strip())
+    if "branch" not in terms or not any(
+        term in terms for term in ("dealer", "institution", "entity")
+    ):
+        return
+    current = prior_key.strip()
+    for row in rows:
+        if not row:
+            continue
+        if row[0].strip():
+            current = row[0].strip()
+        elif current and any(value.strip() for value in row[1:]):
+            row[0] = current
 
 
 def _table_records(
@@ -1007,32 +1215,44 @@ def _table_records(
             ChunkRecord(
                 record_type="parent",
                 parent_order=group_index,
-                raw_text=parent_text,
+                raw_text="\n\n".join(block.raw_text for block in group.blocks),
                 source_text=parent_text,
                 embedding_text="",
                 **common,
             )
         )
 
-        row_groups: list[list[list[str]]] = []
-        current: list[list[str]] = []
-        for row in group.rows:
-            candidate = _render_table(group.header, [*current, row])
-            if current and (len(candidate) > hard or len(_render_table(group.header, current)) >= target):
+        row_groups: list[list[int]] = []
+        current: list[int] = []
+        for row_index, row in enumerate(group.rows):
+            candidate_rows = [group.rows[index] for index in [*current, row_index]]
+            candidate = _render_table(group.header, candidate_rows)
+            current_text = _render_table(
+                group.header, [group.rows[index] for index in current]
+            )
+            if current and (len(candidate) > hard or len(current_text) >= target):
                 row_groups.append(current)
-                current = [row]
+                current = [row_index]
             else:
-                current.append(row)
+                current.append(row_index)
         if current or not group.rows:
             row_groups.append(current)
 
         child_sources: list[str] = []
+        child_blocks: list[list[ExtractedBlock]] = []
         forced_runs: list[int | None] = []
         forced_run = 0
-        for rows in row_groups:
+        for row_indices in row_groups:
+            rows = [group.rows[index] for index in row_indices]
+            contributing = _ordered_table_blocks(
+                block
+                for row_index in row_indices
+                for block in group.row_blocks[row_index]
+            ) or list(group.blocks)
             rendered = _render_table(group.header, rows)
             if len(rendered) <= hard:
                 child_sources.append(rendered)
+                child_blocks.append(contributing)
                 forced_runs.append(None)
                 continue
             # Preserve the complete row in the unembedded parent. Searchable
@@ -1051,6 +1271,7 @@ def _table_records(
             forced_run += 1
             for piece in pieces:
                 child_sources.append(f"{prefix}\n| {key} | {piece} |"[:hard])
+                child_blocks.append(contributing)
                 forced_runs.append(forced_run)
 
         ids = [
@@ -1064,17 +1285,18 @@ def _table_records(
             for index in range(len(child_sources))
         ]
         for index, source in enumerate(child_sources):
+            contributing = child_blocks[index] or list(group.blocks)
             record = ChunkRecord(
                 record_type="child",
                 child_id=ids[index],
                 child_order=index,
-                raw_text=source,
+                raw_text="\n\n".join(block.raw_text for block in contributing),
                 source_text=source,
                 embedding_text=_embedding_text(common["breadcrumb"], section, source),
                 cross_references=_cross_references(source),
                 **common,
             )
-            _apply_table_piece_provenance(record, group, source)
+            _apply_table_blocks_provenance(record, contributing)
             run_id = forced_runs[index]
             if run_id is not None:
                 previous_same = index > 0 and forced_runs[index - 1] == run_id
@@ -1085,19 +1307,29 @@ def _table_records(
     return records
 
 
-def _apply_table_piece_provenance(
-    record: ChunkRecord, group: _TableGroup, source: str
+def _ordered_table_blocks(
+    blocks: Iterable[ExtractedBlock],
+) -> list[ExtractedBlock]:
+    """De-duplicate contributing table blocks in source order."""
+    by_location: dict[tuple[int, int, str | None], ExtractedBlock] = {}
+    for block in blocks:
+        key = (block.pdf_page, block.order, block.table_id)
+        by_location.setdefault(key, block)
+    return [
+        by_location[key]
+        for key in sorted(
+            by_location, key=lambda value: (value[0], value[1], value[2] or "")
+        )
+    ]
+
+
+def _apply_table_blocks_provenance(
+    record: ChunkRecord, selected: Sequence[ExtractedBlock]
 ) -> None:
-    selected: list[ExtractedBlock] = []
-    normalized_source = " ".join(source.split()).casefold()
-    for row, block in zip(group.rows, group.row_blocks):
-        nonempty = [" ".join(cell.split()).casefold() for cell in row if cell.strip()]
-        key = nonempty[0] if nonempty else ""
-        if key and key in normalized_source:
-            selected.append(block)
+    """Apply exact logical-row block provenance to a table child."""
+    selected = _ordered_table_blocks(selected)
     if not selected:
-        selected = group.blocks
-    selected.sort(key=lambda block: (block.pdf_page, block.order))
+        return
     record.pdf_page_start = min(block.pdf_page for block in selected)
     record.pdf_page_end = max(block.pdf_page for block in selected)
     printed = [block.printed_page for block in selected if block.printed_page]
@@ -1145,7 +1377,11 @@ def _parse_markdown(text: str) -> list[list[str]]:
 
 
 def _normalized_header(header: Sequence[str]) -> tuple[str, ...]:
-    return tuple(re.sub(r"\W+", "", cell).lower() for cell in header)
+    return tuple(
+        normalized
+        for cell in header
+        if (normalized := re.sub(r"\W+", "", cell).lower())
+    )
 
 
 def _extract_code_groups(lines: Sequence[_Line]) -> tuple[list[_CodeGroup], set[int]]:
@@ -1236,7 +1472,7 @@ def _code_records(
             ChunkRecord(
                 record_type="parent",
                 parent_order=group_index,
-                raw_text=parent_text,
+                raw_text="\n".join(line.raw.rstrip() for line in group.lines),
                 source_text=parent_text,
                 embedding_text="",
                 **common,
@@ -1325,6 +1561,7 @@ def _apply_code_piece_provenance(
     ]
     if not selected:
         selected = group.lines
+    record.raw_text = "\n".join(line.raw.rstrip() for line in selected)
     _apply_piece_provenance(record, selected)
 
 

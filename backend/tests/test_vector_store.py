@@ -60,6 +60,10 @@ def test_structured_metadata_parent_not_vector_and_atomic_delete(tmp_path) -> No
         results = await store.search("source", top_k=5)
         assert results[0]["metadata"]["clause_path"] == "B.4(A)(i)"
         assert results[0]["metadata"]["cross_references"] == ["I.3(B)"]
+        resolved = await store.get_children_by_clause_paths(
+            ["b.4(a)(i)"], document_id="doc"
+        )
+        assert [item["id"] for item in resolved] == ["c_a"]
         cursor = await store._db.execute("SELECT count(*) FROM document_parents")
         assert (await cursor.fetchone())[0] == 1
         cursor = await store._db.execute("SELECT count(*) FROM vec_chunks")

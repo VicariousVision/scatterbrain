@@ -29,6 +29,31 @@ def test_furniture_metadata_and_mixed_block_order_are_preserved() -> None:
     assert second.blocks[1].source_spans[0].pdf_page == 99
 
 
+def test_body_table_near_header_band_cannot_override_section_marker() -> None:
+    pages = [
+        {
+            "pdf_page": 236,
+            "blocks": [
+                {
+                    "text": "Currency and Exchanges Manual for Authorised Dealers H.",
+                    "bbox": [70, 44, 525, 54],
+                },
+                {
+                    "block_type": "table",
+                    "text": "| Details |\n| --- |\n| Listed on a South African exchange. |",
+                    "bbox": [119, 71.6, 535, 693],
+                    "table_header": ["Details"],
+                    "table_rows": [["Listed on a South African exchange."]],
+                },
+            ],
+        }
+    ]
+    document = parse_document_structured("manual.pdf", b"near-band", pdf_pages=pages)
+    page = document.pages[0]
+    assert page.section_marker == "H."
+    assert [block.block_type for block in page.blocks] == ["table"]
+
+
 def test_version_control_and_toc_are_navigation_not_body() -> None:
     pages = [
         {

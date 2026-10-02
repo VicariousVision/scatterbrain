@@ -70,6 +70,22 @@ def test_exact_clause_and_amount_beat_semantic_only_then_diversify() -> None:
     assert primary[0].governing_context == "governing p1"
 
 
+def test_exact_clause_outside_vector_pool_wins_post_boost_tie() -> None:
+    semantic = _result(
+        "semantic", "general allowance text", 1.0, "p1", "B.4", "B.4(A)(ii)"
+    )
+    target = _result(
+        "target", "actual allowance rule", 0.0, "p2", "B.4", "B.4(A)(i)"
+    )
+    contexts = asyncio.run(
+        RetrievalService(
+            FakeStore([semantic], exact=[target]), _settings(retrieval_top_k=1)
+        ).retrieve("Explain B.4(A)(i)")
+    )
+    assert contexts[0].child_id == "target"
+    assert contexts[0].score == 1.0
+
+
 def test_continuation_and_cross_reference_load_actual_source_only_when_needed() -> None:
     target = _result("target", "actual I.3(B) source", 0.0, "pi", "I.3", "I.3(B)")
     neighbor = _result("next", "continued list", 0.0, "p", "B.2", "B.2(B)(ii)")
@@ -95,3 +111,29 @@ def test_ordinary_query_does_not_append_unrelated_neighbor() -> None:
     neighbor = _result("next", "unrelated", 0.0, "p", "B.2", "B.2(B)(ii)")
     contexts = asyncio.run(RetrievalService(FakeStore([anchor], adjacent={"anchor": [neighbor]}), _settings(retrieval_top_k=1)).retrieve("Explain this rule"))
     assert [context.child_id for context in contexts] == ["anchor"]
+
+
+def test_bop_code_and_defined_term_receive_exact_lexical_boosts() -> None:
+    semantic = _result("semantic", "general exchange-control text", 0.50, "p1", "A.2")
+    code = _result("code", "511 01 Investment allowance", 0.20, "p2", "J.", code="511 01")
+    code_contexts = asyncio.run(
+        RetrievalService(
+            FakeStore([semantic, code]), _settings(retrieval_top_k=1)
+        ).retrieve("What does BOP code 511 01 mean?")
+    )
+    assert code_contexts[0].child_id == "code"
+
+    definition = _result(
+        "definition",
+        "Affected person means a person meeting the statutory test.",
+        0.35,
+        "p3",
+        "A.1",
+        defined_term="Affected person",
+    )
+    term_contexts = asyncio.run(
+        RetrievalService(
+            FakeStore([semantic, definition]), _settings(retrieval_top_k=1)
+        ).retrieve("Who is an affected person?")
+    )
+    assert term_contexts[0].child_id == "definition"

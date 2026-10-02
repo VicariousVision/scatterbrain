@@ -491,7 +491,10 @@ def _classify_furniture_and_pages(pages: list[ExtractedPage]) -> None:
             if not block.bbox:
                 continue
             top, bottom = block.bbox[1], block.bbox[3]
-            if top <= 72 or bottom >= height - 72:
+            # Furniture blocks are contained in a margin band. A body table
+            # may begin near y=72 while extending hundreds of points; treating
+            # that as a header can misread ordinary words as section markers.
+            if bottom <= 72 or top >= height - 72:
                 band_candidates.append((page_index, block_index, _furniture_key(block.raw_text)))
     frequencies = Counter(key for _, _, key in band_candidates if key)
     threshold = max(2, math.ceil(len(pages) * 0.35))
@@ -503,8 +506,8 @@ def _classify_furniture_and_pages(pages: list[ExtractedPage]) -> None:
             text = " ".join(block.raw_text.split())
             lower = text.lower()
             bbox = block.bbox
-            top_band = bool(bbox and bbox[1] <= 72)
-            bottom_band = bool(bbox and bbox[3] >= height - 72)
+            top_band = bool(bbox and bbox[3] <= 72)
+            bottom_band = bool(bbox and bbox[1] >= height - 72)
 
             section_matches = _SECTION_RE.findall(text)
             if top_band and section_matches:
