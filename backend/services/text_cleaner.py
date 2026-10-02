@@ -26,6 +26,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from models.content import ParsedDocument
+
 # Control characters that carry no textual meaning. Tab and newline are kept
 # (handled by the whitespace logic); everything else in the C0/C1 ranges plus
 # the Unicode replacement char is removed.
@@ -120,4 +122,31 @@ def clean_text(text: str) -> str:
     # 6. Cap consecutive blank lines at a single paragraph break.
     text = _EXCESS_BLANK_LINES.sub("\n\n", text)
 
-    return text.strip()
+    # Remove only surrounding blank lines. ``str.strip()`` would erase the
+    # first line's legal indentation, which is hierarchy evidence.
+    return text.strip("\n")
+
+def clean_parsed_document(document: ParsedDocument) -> ParsedDocument:
+    """Clean each block without flattening pages or changing raw source.
+
+    A deep copy is returned so callers can retain the exact parser output for
+    diagnostics. Coordinates, page boundaries, table rows, and source spans
+    are preserved; only ``clean_text`` and normalized table-cell values are
+    populated on the copy.
+
+    Parameters
+    ----------
+    document:
+        Page-aware parser output.
+    """
+    cleaned = document.model_copy(deep=True)
+    for page in cleaned.pages:
+        for block in page.blocks:
+            block.clean_text = clean_text(block.raw_text)
+            if block.table_header:
+                block.table_header = [clean_text(cell) for cell in block.table_header]
+            if block.table_rows:
+                block.table_rows = [
+                    [clean_text(cell) for cell in row] for row in block.table_rows
+                ]
+    return cleaned

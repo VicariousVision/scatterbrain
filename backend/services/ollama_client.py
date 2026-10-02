@@ -1,6 +1,7 @@
 """Ollama HTTP client for interacting with the locally-hosted LLM via the Ollama REST API.
 
-Provides async methods for text generation, embeddings, and connectivity health checks.
+Provides async methods for text generation (``/api/generate``), role-based chat
+completion (``/api/chat``), embeddings, and connectivity health checks.
 
 Reliability notes (CPU-only, single Ollama process):
   - A module-level asyncio.Semaphore(1) serialises ALL outbound calls
@@ -121,6 +122,8 @@ class OllamaClient:
         embedding_model: Model name for embeddings; defaults to ``model`` if omitted.
         num_gpu:         GPU layers to offload.  ``0`` = CPU-only (default).
         embedding_dimension: Expected vector dimension for the embedding model.
+        num_ctx:         Context window in tokens, sent as ``options.num_ctx``
+                         on generation and chat calls.
     """
 
     def __init__(
@@ -130,9 +133,12 @@ class OllamaClient:
         embedding_model: str | None = None,
         num_gpu: int = 0,
         embedding_dimension: int = 768,
+        num_ctx: int = 8192,
     ) -> None:
         if embedding_dimension <= 0:
             raise ValueError("embedding_dimension must be positive")
+        if num_ctx <= 0:
+            raise ValueError("num_ctx must be positive")
 
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -141,10 +147,25 @@ class OllamaClient:
         self.provider_name = "ollama"
         self.model_name = self.embedding_model
         self.embedding_dimension = embedding_dimension
+        self.num_ctx = num_ctx
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _build_options(
+        self,
+        *,
+        max_tokens: int | None,
+        temperature: float | None,
+    ) -> dict:
+        """Return the Ollama ``options`` dict shared by generate and chat."""
+        options: dict = {"num_gpu": self.num_gpu, "num_ctx": self.num_ctx}
+        if max_tokens is not None:
+            options["num_predict"] = max_tokens
+        if temperature is not None:
+            options["temperature"] = temperature
+        return options
 
     async def _post_with_retry(
         self,
@@ -258,11 +279,7 @@ class OllamaClient:
         Raises:
             OllamaClientError: On request failure or unexpected response format.
         """
-        options: dict = {"num_gpu": self.num_gpu}
-        if max_tokens is not None:
-            options["num_predict"] = max_tokens
-        if temperature is not None:
-            options["temperature"] = temperature
+        options = self._build_options(max_tokens=max_tokens, temperature=temperature)
 
         payload: dict = {
             "model": self.model,
@@ -286,6 +303,55 @@ class OllamaClient:
         except (KeyError, ValueError) as exc:
             raise OllamaClientError(
                 f"Unexpected response format from Ollama /api/generate: {exc}"
+            ) from exc
+
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        json_schema: dict | None = None,
+        max_tokens: int | None = None,
+        think: bool | None = None,
+        temperature: float | None = None,
+    ) -> str:
+        """Send role-tagged ``messages`` to ``/api/chat`` and return the reply text.
+
+        Args:
+            messages:   Ordered chat messages, each ``{"role": ..., "content": ...}``
+                        with role ``system``, ``user`` or ``assistant``.
+            json_schema: If set, passed as ``format`` so Ollama's structured
+                        outputs constrain decoding to this JSON Schema.
+            max_tokens: If set, passed as ``num_predict`` in the options dict
+                        to cap output length.
+            think:      If ``False``, disables chain-of-thought reasoning for
+                        thinking-capable models. Ignored (not sent) when ``None``.
+            temperature: Sampling temperature; ``None`` keeps the model default.
+
+        Raises:
+            OllamaClientError: On request failure or unexpected response format.
+        """
+        payload: dict = {
+            "model": self.model,
+            "messages": messages,
+            "stream": False,
+            "options": self._build_options(max_tokens=max_tokens, temperature=temperature),
+        }
+        if json_schema is not None:
+            payload["format"] = json_schema
+        if think is not None:
+            payload["think"] = think
+
+        try:
+            response = await self._post_with_retry("/api/chat", payload)
+            response.raise_for_status()
+            return response.json()["message"]["content"]
+        except httpx.HTTPStatusError as exc:
+            raise OllamaClientError(
+                f"Ollama API returned status {exc.response.status_code}: {exc.response.text}"
+            ) from exc
+        except (KeyError, TypeError, ValueError) as exc:
+            raise OllamaClientError(
+                f"Unexpected response format from Ollama /api/chat: {exc}"
             ) from exc
 
     async def health_check(self) -> bool:

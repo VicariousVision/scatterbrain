@@ -16,7 +16,9 @@ import logging
 
 from fastapi import APIRouter, HTTPException, status
 
+from config import settings
 from models.chat import ChatRequest, ChatResponse
+from models.content import ChatResult
 from services.chat_service import ChatService
 from services.ollama_client import OllamaClientError
 
@@ -63,10 +65,17 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
     svc = _require_chat_service()
     
     try:
-        response_text, retrieved_chunks = await svc.query(
+        result = await svc.query(
             user_query=request.query,
-            top_k=5,
+            top_k=settings.retrieval_top_k,
         )
+        if isinstance(result, ChatResult):
+            response_text = result.answer
+            retrieved_chunks = result.source_texts
+            citations = result.citations
+        else:  # Backward-compatible service doubles/older implementations.
+            response_text, retrieved_chunks = result
+            citations = []
     except OllamaClientError as exc:
         logger.error("Ollama unavailable during chat query: %s", exc)
         raise HTTPException(
@@ -90,4 +99,5 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
         response=response_text,
         history=updated_history,
         retrieved_chunks=len(retrieved_chunks),
+        citations=citations,
     )

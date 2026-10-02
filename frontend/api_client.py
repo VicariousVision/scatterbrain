@@ -129,8 +129,9 @@ def chat_query(query: str, history: list) -> dict:
     """Submit a chat query to the backend and return the LLM response.
     
     Sends a POST request to ``/chat/query`` with a 180-second timeout.
-    Returns the parsed JSON body containing ``response`` (the LLM answer
-    text) and ``history`` (the updated message history).
+    Returns the parsed JSON body containing ``response`` (the LLM answer),
+    ``history`` (the updated message history), ``retrieved_chunks``, and an
+    optional additive ``citations`` array. Older backends may omit citations.
     
     Parameters
     ----------

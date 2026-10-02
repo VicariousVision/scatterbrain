@@ -1,0 +1,13 @@
+Test run (iteration 2), from backend/:
+
+> .\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider
+.....................s....                                               [100%]
+25 passed, 1 skipped, 1 warning in 10.02s
+  - skipped: RAGAS gate (RUN_RAGAS_EVAL not set)
+  - warning: pre-existing PydanticDeprecatedSince20 (class-based Config in config.py)
+  - after exit: "Exception ignored in ResourceTracker.__del__" from the
+    multiprocess package (RAGAS eval dependency) at interpreter shutdown;
+    not a test failure, exit code 0.
+
+> .\.venv\Scripts\python.exe -c "import main"
+import main OK

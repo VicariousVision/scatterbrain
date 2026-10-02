@@ -28,6 +28,7 @@ from services.document_db import DocumentDB
 from services.document_service import DocumentService
 from services.embedding_provider import EmbeddingProvider, create_embedding_provider
 from services.ollama_client import OllamaClient
+from services.retrieval_service import RetrievalService
 from services.vector_store import VectorStore
 
 logging.basicConfig(
@@ -50,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         embedding_model=settings.ollama_embedding_model,
         num_gpu=settings.ollama_num_gpu,
         embedding_dimension=settings.embedding_dimension,
+        num_ctx=settings.ollama_num_ctx,
     )
     
     # ------------------------------------------------------------------
@@ -100,10 +102,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # re-uploaded.
     document_db.fail_stale_processing()
     document_service = DocumentService(vector_store=vector_store, document_db=document_db)
+    retrieval_service = RetrievalService(vector_store=vector_store, app_settings=settings)
     chat_service = ChatService(
         vector_store=vector_store,
         ollama_client=ollama_client,
         think=settings.ollama_think,
+        num_ctx=settings.ollama_num_ctx,
+        retrieval_service=retrieval_service,
     )
     
     # ------------------------------------------------------------------
@@ -111,7 +116,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ------------------------------------------------------------------
     documents_router.set_services(document_service=document_service)
     chat_router.set_services(chat_service=chat_service)
-    search_router.set_services(vector_store=vector_store)
+    search_router.set_services(retrieval_service=retrieval_service)
     
     logger.info("Scatterbrain RAG backend started")
     yield

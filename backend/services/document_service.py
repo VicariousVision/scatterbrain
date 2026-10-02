@@ -1,215 +1,136 @@
-"""Document service orchestrating the RAG ingestion pipeline.
+"""Asynchronous orchestration for structured document ingestion.
 
-Processing pipeline (run as a background asyncio task):
-  1. Parse document text (PDF or TXT) and clean it
-  2. Chunk text using recursive text splitter
-  3. Generate embeddings and store in SQLite + sqlite-vec
-  4. Track status in the SQLite document store
+Pipeline: hash bytes -> page-aware parse -> block cleaning -> legal/generic
+routing -> parent/child chunking -> atomic vector-store replacement -> metadata
+status update. Parsing/chunking run in worker threads and Ollama remains async.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
+from models.content import SCHEMA_VERSION
 from models.document import DocumentRecord
 from services.document_db import DocumentDB
-from services.document_parser import parse_document, DocumentParsingError
-from services.text_chunker import chunk_text
-from services.text_cleaner import clean_text
+from services.document_parser import DocumentParsingError, parse_document_structured
+from services.legal_chunker import chunk_parsed_document
+from services.text_cleaner import clean_parsed_document
 from services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
 
 
 class DocumentService:
-    """Orchestrates document upload and the asynchronous RAG ingestion pipeline.
-    
+    """Orchestrate upload, serialized replacement, and deletion.
+
     Parameters
     ----------
     vector_store:
-        Vector store for embedding and storing document chunks.
+        Atomic structured persistence and embedding service.
     document_db:
-        Persistent store for document metadata records, so uploads survive
-        an application restart.
+        Upload status/provenance store.
     """
-    
-    def __init__(
-        self,
-        vector_store: VectorStore,
-        document_db: DocumentDB,
-    ) -> None:
+
+    def __init__(self, vector_store: VectorStore, document_db: DocumentDB) -> None:
         self._vector_store = vector_store
         self._document_db = document_db
-        # One active ingestion at a time to avoid memory bloat
         self._processing_semaphore = asyncio.Semaphore(1)
-    
-    async def upload(
-        self,
-        filename: str,
-        content: bytes,
-    ) -> DocumentRecord:
-        """Accept an uploaded file, create a tracking record, and start processing.
-        
-        Args:
-            filename: Original filename including extension.
-            content: Raw file bytes.
-            
-        Returns:
-            DocumentRecord with status "processing".
-        """
+
+    async def upload(self, filename: str, content: bytes) -> DocumentRecord:
+        """Persist a processing record and start ingestion in the background."""
         document_id = str(uuid.uuid4())
         record = DocumentRecord(
             document_id=document_id,
             filename=filename,
             uploaded_at=datetime.now(tz=timezone.utc),
             status="processing",
+            source_sha256=hashlib.sha256(content).hexdigest(),
+            schema_version=SCHEMA_VERSION,
+            needs_reingestion=False,
         )
-        
-        # Persist record so it survives an application restart
         self._document_db.create(record)
-        
-        logger.info(
-            "Document uploaded: document_id=%s filename=%s",
-            document_id,
-            filename,
-        )
-        
-        # Start background processing
         asyncio.create_task(
             self._process_document(document_id, filename, content),
             name=f"process-{document_id}",
         )
-        
         return record
-    
+
     def list_documents(self) -> List[DocumentRecord]:
-        """Return all document records ordered by upload time (newest first).
-        
-        Returns:
-            List of all document records.
-        """
         return self._document_db.list_all()
-    
+
     def get_document(self, document_id: str) -> Optional[DocumentRecord]:
-        """Return the record for a single document, or None if not found.
-        
-        Args:
-            document_id: Document ID to retrieve.
-            
-        Returns:
-            DocumentRecord if found, None otherwise.
-        """
         return self._document_db.get(document_id)
-    
+
     async def delete_document(self, document_id: str) -> None:
-        """Delete a document from vector store and the persistent store.
-        
-        Args:
-            document_id: Document ID to delete.
-        """
-        # Delete from vector store
-        await self._vector_store.delete_document(document_id)
-        
-        # Delete from persistent store
-        self._document_db.delete(document_id)
-        
-        logger.info("Deleted document: %s", document_id)
-    
+        """Serialize deletion with ingestion and remove vectors before status."""
+        async with self._processing_semaphore:
+            await self._vector_store.delete_document(document_id)
+            self._document_db.delete(document_id)
+
     async def _process_document(
-        self,
-        document_id: str,
-        filename: str,
-        content: bytes,
+        self, document_id: str, filename: str, content: bytes
     ) -> None:
-        """Run the full RAG ingestion pipeline for an uploaded document.
-        
-        Args:
-            document_id: Unique document identifier.
-            filename: Original filename.
-            content: Raw file bytes.
-        """
-        logger.info("Starting RAG pipeline for document_id=%s", document_id)
-        
+        """Run the complete structured pipeline and preserve prior data on failure."""
         try:
-            # Step 1: Parse document text. pdfplumber is synchronous and can
-            # take tens of seconds on large PDFs, so run it in a worker thread
-            # to keep the event loop (and every other API request) responsive.
-            raw_text = await asyncio.to_thread(parse_document, filename, content)
-            logger.info(
-                "Parsed document_id=%s: %d characters",
-                document_id,
-                len(raw_text),
-            )
-
-            # Step 1b: Clean text -- strip formatting noise (control/zero-width
-            # chars, broken hyphenation, irregular whitespace) that hurts
-            # embedding quality, before chunking.
-            text = clean_text(raw_text)
-            logger.info(
-                "Cleaned document_id=%s: %d -> %d characters",
-                document_id,
-                len(raw_text),
-                len(text),
-            )
-
-            if not text:
-                raise RuntimeError("Document contained no extractable text")
-
-            # Step 2: Chunk text
-            chunks = await asyncio.to_thread(chunk_text, text)
-            logger.info(
-                "Chunked document_id=%s: %d chunks",
-                document_id,
-                len(chunks),
-            )
-            
-            if not chunks:
-                raise RuntimeError("No chunks produced from document")
-            
-            # Step 3: Embed and store in vector database
             async with self._processing_semaphore:
-                # Delete any existing chunks for this filename to avoid duplicates
-                await self._vector_store.delete_by_filename(filename)
-                
-                # Add new chunks
+                parsed = await asyncio.to_thread(
+                    parse_document_structured, filename, content
+                )
+                cleaned = await asyncio.to_thread(clean_parsed_document, parsed)
+                records = await asyncio.to_thread(
+                    chunk_parsed_document,
+                    cleaned,
+                    document_id=document_id,
+                )
+                children = [record for record in records if record.record_type == "child"]
+                if not children:
+                    raise RuntimeError("No searchable chunks produced from document")
+
+                # VectorStore computes embeddings before its transaction and
+                # replaces the filename atomically. It does not delete the old
+                # ingestion if parsing/embedding/insertion fails.
                 chunk_count = await self._vector_store.add_document(
                     document_id=document_id,
                     filename=filename,
-                    chunks=chunks,
+                    chunks=records,
                 )
-            
-            # Step 4: Update status to completed
-            self._update_status(document_id, "completed", chunk_count=chunk_count)
-            
-            logger.info(
-                "RAG pipeline completed for document_id=%s (%d chunks)",
-                document_id,
-                chunk_count,
-            )
-        
+                self._document_db.update_status(
+                    document_id,
+                    "completed",
+                    chunk_count=chunk_count,
+                    document_title=cleaned.document_title,
+                    document_version=cleaned.document_version,
+                    extraction_method=cleaned.extraction_method,
+                    parser_version=cleaned.parser_version,
+                    schema_version=cleaned.schema_version,
+                    needs_reingestion=False,
+                )
+                # Superseded metadata is removed only after successful vector
+                # replacement and completion of the new row.
+                self._document_db.delete_by_filename_except(filename, document_id)
+                logger.info(
+                    "Structured ingestion completed for %s (%d children)",
+                    filename,
+                    chunk_count,
+                )
         except DocumentParsingError as exc:
-            error_message = f"Document parsing failed: {exc}"
-            logger.error(
-                "RAG pipeline failed for document_id=%s: %s",
-                document_id,
-                error_message,
+            self._update_status(
+                document_id, "failed", error=f"Document parsing failed: {exc}"
             )
-            self._update_status(document_id, "failed", error=error_message)
-        
         except Exception as exc:
-            error_message = str(exc)
             logger.error(
-                "RAG pipeline failed for document_id=%s: %s",
+                "RAG ingestion failed for document_id=%s: %s",
                 document_id,
-                error_message,
+                exc,
                 exc_info=True,
             )
-            self._update_status(document_id, "failed", error=error_message)
-    
+            self._update_status(document_id, "failed", error=str(exc))
+
     def _update_status(
         self,
         document_id: str,
@@ -217,8 +138,9 @@ class DocumentService:
         error: Optional[str] = None,
         chunk_count: Optional[int] = None,
     ) -> None:
-        """Update document status in the persistent store."""
         self._document_db.update_status(
-            document_id, status=status, error=error, chunk_count=chunk_count
+            document_id,
+            status=status,
+            error=error,
+            chunk_count=chunk_count,
         )
-

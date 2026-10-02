@@ -12,16 +12,17 @@ $env:RUN_RAGAS_EVAL = "1"; pytest -m ragas -s                 # pytest gate
 ```mermaid
 flowchart LR
     GD[golden_dataset.json] --> RE[ragas_eval.evaluate_pipeline]
-    RE --> P[document_parser + text_cleaner + text_chunker]
-    RE --> VS[VectorStore<br/>throwaway DB]
-    RE --> CS[ChatService]
+    RE --> P[structured parser + cleaner + legal/generic chunker]
+    RE --> VS[VectorStore<br/>explicit throwaway DB]
+    RE --> RS[RetrievalService]
+    RS --> CS[ChatService]
     RE --> J[OllamaRagasLLM]
     RE --> E[ProviderRagasEmbeddings]
     J --> OC[OllamaClient judge model]
     E --> EP[EmbeddingProvider]
 ```
 
-It reuses the production parse/clean/chunk functions, `VectorStore`, `ChatService`, `OllamaClient`, and `create_embedding_provider`, but writes to a temporary DB and refuses to run against `settings.sqlite_db_path`.
+It reuses the production page-aware parse/clean/legal-or-generic chunk route, `VectorStore(db_path=...)`, `RetrievalService`, `ChatService`, `OllamaClient`, and `create_embedding_provider`. The explicit evaluation path prevents mutation of `settings.sqlite_db_path`; reports continue recording generic `CHUNK_SIZE/CHUNK_OVERLAP` for the fictional TXT corpus.
 
 ## `__init__.py`
 

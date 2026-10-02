@@ -5,8 +5,10 @@ A local document intelligence system using Retrieval-Augmented Generation (RAG).
 ## Architecture
 
 **RAG pipeline:**
-1. Upload → parse PDF/TXT → chunk text → generate embeddings → store in SQLite + sqlite-vec
-2. Query → embed the question → cosine search → retrieve top-k chunks → generate an answer with Ollama
+1. Upload → page/block-aware parse → structured clean → legal hierarchy or generic fallback → embed searchable children → atomically store parents/children in SQLite + sqlite-vec
+2. Query → embed the question → retrieve a wider child pool → exact-match boosts + diversification → conditional governing/continuation/cross-reference expansion → generate a cited answer with Ollama
+
+Legal/manual PDFs use clause-first parent/child chunking; ordinary TXT and unrelated PDFs keep the generic recursive splitter. See [Legal/manual ingestion and retrieval](docs/legal-document-chunking.md) for the design, migration behavior, and rationale.
 
 **Tech stack:**
 - Backend: FastAPI, Python 3.11+
@@ -74,7 +76,7 @@ This model returns 1024-dimensional vectors. Scatterbrain detects that dimension
 
 ### Changing embedding models
 
-The vector table has a fixed dimension and vectors from different models cannot be mixed. When changing `EMBEDDING_PROVIDER`, `OLLAMA_EMBEDDING_MODEL`, or `HUGGINGFACE_EMBEDDING_MODEL`, delete the database configured by `SQLITE_DB_PATH` and re-ingest documents. Scatterbrain stores the provider/model/dimension metadata and refuses to start with an incompatible existing database.
+The vector table has a fixed dimension and vectors from different models cannot be mixed. Scatterbrain stores provider/model/dimension metadata and refuses to start with an incompatible existing database without modifying it. When changing providers/models, use a new `SQLITE_DB_PATH` and re-ingest; remove the old database only after you have deliberately retired it.
 
 ## Run the application
 
@@ -102,7 +104,9 @@ Frontend: `http://localhost:8501`
 2. Wait for processing to change from `processing` to `completed`.
 3. Open Chat and ask questions about the uploaded documents.
 
-The upload pipeline parses, chunks, embeds, and stores the document. The chat pipeline embeds the question, retrieves the most similar chunks, and sends only that context to the Ollama generation model.
+The upload pipeline preserves PDF pages, block coordinates, tables, legal hierarchy, source spans, and revision/page metadata before embedding only searchable children. The chat pipeline applies deterministic hybrid ranking and sends only budgeted source context to Ollama. Answers include additive source citations such as `B.4(A)(i), p. 98` when structured metadata is available.
+
+Existing flat chunks remain searchable after the additive schema migration, but re-uploading those documents is required to obtain hierarchy/page citations. Re-uploading the same filename replaces parent, child, and vector records transactionally; a failed replacement leaves the prior ingestion intact.
 
 ## API endpoints
 
@@ -110,7 +114,8 @@ The upload pipeline parses, chunks, embeds, and stores the document. The chat pi
 - `GET /documents/` — list documents
 - `GET /documents/{id}` — get document status
 - `DELETE /documents/{id}` — delete a document and its chunks
-- `POST /chat/query` — query documents with RAG
+- `POST /chat/query` — query documents with RAG; existing fields plus additive structured `citations`
+- `GET /search/` — inspect diversified child retrieval with additive legal metadata
 - `GET /health` — service health check
 
 ## Project structure
@@ -123,11 +128,14 @@ scatterbrain/
 │   ├── models/                    # Pydantic API models
 │   ├── routers/                   # API endpoints
 │   ├── services/
-│   │   ├── embedding_provider.py  # Hugging Face embedding backend
-│   │   ├── vector_store.py        # SQLite + sqlite-vec storage/search
-│   │   ├── ollama_client.py       # Ollama generation/embedding client
-│   │   ├── document_service.py    # Upload and ingestion pipeline
-│   │   └── chat_service.py        # RAG query orchestration
+│   │   ├── embedding_provider.py # Hugging Face/Ollama embedding backend
+│   │   ├── document_parser.py    # Page/block-aware PDF/TXT extraction
+│   │   ├── legal_chunker.py      # Clause-first parent/child chunking
+│   │   ├── retrieval_service.py  # Hybrid boosts/diversification/expansion
+│   │   ├── vector_store.py       # SQLite + sqlite-vec storage/search
+│   │   ├── ollama_client.py      # Ollama generation/embedding client
+│   │   ├── document_service.py   # Upload and structured ingestion pipeline
+│   │   └── chat_service.py       # Cited RAG query orchestration
 │   └── requirements.txt
 ├── frontend/                      # Streamlit application
 ├── .env.example                   # Configuration template
@@ -147,15 +155,23 @@ scatterbrain/
 | `HUGGINGFACE_DEVICE` | `cpu` | Sentence Transformers device |
 | `HUGGINGFACE_NORMALIZE_EMBEDDINGS` | `true` | Normalize Hugging Face vectors |
 | `SQLITE_DB_PATH` | `scatterbrain.db` | SQLite database path |
-| `CHUNK_SIZE` | `1000` | Characters per chunk |
-| `CHUNK_OVERLAP` | `200` | Chunk overlap |
-| `RETRIEVAL_TOP_K` | `5` | Chunks retrieved per query |
+| `CHUNK_SIZE` | `1000` | Generic/final recursive fallback characters |
+| `CHUNK_OVERLAP` | `200` | Generic fallback overlap only |
+| `LEGAL_CHUNK_TARGET_CHARS` | `900` | Searchable legal-child target |
+| `LEGAL_CHUNK_MIN_CHARS` | `450` | Soft intact legal minimum |
+| `LEGAL_CHUNK_HARD_MAX_CHARS` | `1400` | Strict searchable legal maximum |
+| `LEGAL_FORCED_SPLIT_OVERLAP_CHARS` | `120` | Tail only for one forced continuous-provision split |
+| `LEGAL_PARENT_MAX_CHARS` | `8000` | Intermediate-parent threshold |
+| `RETRIEVAL_CANDIDATE_POOL` | `10` | Child candidates before boosts/diversification |
+| `RETRIEVAL_TOP_K` | `5` | Final diversified primary children |
+| `RETRIEVAL_MAX_CHILDREN_PER_PARENT` | `2` | First-pass diversity cap |
+| `RETRIEVAL_MAX_CHILDREN_PER_SECTION` | `3` | First-pass diversity cap |
 
 ## Troubleshooting
 
 **Hugging Face model loading fails:** verify `sentence-transformers` was installed from `backend/requirements.txt`, check the model ID, and ensure the first-run machine can download the model. A local model directory can also be used as `HUGGINGFACE_EMBEDDING_MODEL`.
 
-**Embedding configuration does not match the database:** delete the database configured by `SQLITE_DB_PATH`, then upload the documents again.
+**Embedding configuration does not match the database:** Scatterbrain refuses startup without altering the database. Restore the matching provider/model/dimension, or point `SQLITE_DB_PATH` at a new database and re-ingest. Delete the old database only when you have intentionally retired it.
 
 **Ollama is unavailable:** make sure `ollama serve` is running, check `OLLAMA_BASE_URL`, and verify the generation model with `ollama list`.
 

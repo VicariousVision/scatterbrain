@@ -1,53 +1,40 @@
 # Routers (`backend/routers/`)
 
-Thin HTTP layer. Each router holds a module-level service singleton set by `main.py` via `set_services(...)`; calling an endpoint before registration raises `RuntimeError`.
+Routers are thin and retain module-level singleton injection from `main.py`; no FastAPI `Depends` service wiring is used.
 
-| Router | Prefix | Depends on |
+| Router | Prefix | Injected service |
 | --- | --- | --- |
-| `health.py` | none | nothing |
+| `health.py` | none | none |
 | `documents.py` | `/documents` | `DocumentService` |
 | `chat.py` | `/chat` | `ChatService` |
-| `search.py` | `/search` | `VectorStore` |
+| `search.py` | `/search` | `RetrievalService` |
 
-## `health.py`
+## Documents
 
-`GET /health` → `200 {"status": "ok"}`. Liveness only; doesn't check Ollama or the DB.
+- `POST /documents/upload` accepts `.pdf`/`.txt`, returns 202 `{document_id}`, and starts structured background ingestion.
+- `GET /documents/` and `GET /documents/{id}` preserve existing status fields and add chunk count, source hash/title/version/parser, and `needs_reingestion`.
+- `DELETE /documents/{id}` returns 204 after serialized atomic vector-store cleanup and metadata deletion; unknown IDs return 404.
 
-## `documents.py`
+Poll detail until `completed` or `failed`. Legacy completed rows may report `needs_reingestion=true` because old flat chunks cannot retroactively gain page/hierarchy provenance.
 
-`set_services(document_service: DocumentService)`
+## Chat
 
-| Method & path | Input | Success | Errors | Calls |
-| --- | --- | --- | --- | --- |
-| `POST /documents/upload` | multipart `file` (`.pdf` / `.txt`) | `202` `UploadResponse` | `400` wrong extension | `DocumentService.upload` |
-| `GET /documents/` | none | `200` `List[DocumentListItem]`, newest first | | `DocumentService.list_documents` |
-| `GET /documents/{document_id}` | path `document_id` | `200` `DocumentListItem` | `404` | `DocumentService.get_document` |
-| `DELETE /documents/{document_id}` | path `document_id` | `204` | `404` | `get_document`, then `delete_document` |
+`POST /chat/query` accepts the unchanged `{query, history}` body. `main.py` supplies validated `RETRIEVAL_TOP_K`; it is no longer hard-coded in the router.
 
-Upload returns immediately; poll `GET /documents/{id}` until status is `completed` or `failed`. The whole file is read into memory and there is no size limit.
+The response retains:
 
-## `chat.py`
+```json
+{"response": "...", "history": [], "retrieved_chunks": 5}
+```
 
-`set_services(chat_service: ChatService)`
+and adds default-empty `citations`, whose entries include filename, child/document IDs, section/clause, printed/PDF page range, revisions, heading, and display label. HTTP 503 represents local Ollama failure; other unexpected errors return 500. History remains display state and is not treated as source evidence.
 
-| Method & path | Input | Success | Errors | Calls |
-| --- | --- | --- | --- | --- |
-| `POST /chat/query` | `ChatRequest` | `200` `ChatResponse` | `503` on `OllamaClientError`, `500` otherwise | `ChatService.query(user_query, top_k=5)` |
+## Search
 
-Behaviour worth knowing:
-- `top_k` is hard-coded to `5`, not read from `settings.retrieval_top_k`.
-- `history` is echoed back with the new turn appended but is not sent to the LLM, so each query is answered independently.
+`GET /search/?q=...&top_k=5&document_id=...` runs the same hybrid child ranking/diversification as chat but no LLM. `q` is required/non-empty, `top_k` is 1–50, and document restriction is optional.
 
-## `search.py`
+Every old `SearchResultItem` field remains required/available. Structured score, hierarchy, pages, relationships, table/code/definition data, cross-references, extraction/parser versions, and short governing context are additive. `set_services(vector_store=...)` remains accepted as a compatibility adapter, while production injects the singleton `RetrievalService`.
 
-`set_services(vector_store: VectorStore)`
+## Health
 
-`GET /search/` returns `List[SearchResultItem]` ordered by similarity (highest first). No LLM call.
-
-| Query param | Type | Default | Constraint |
-| --- | --- | --- | --- |
-| `q` | `str` | required | `min_length=1` |
-| `top_k` | `int` | `5` | `1`–`50` |
-| `document_id` | `str \| None` | `None` | Restrict to one document |
-
-Calls `VectorStore.search(query=q, top_k=top_k, document_id=document_id)`.
+`GET /health` returns liveness only; it does not guarantee Ollama/model readiness.

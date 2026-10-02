@@ -1,30 +1,41 @@
-"""Pydantic models for the /chat/query endpoint."""
+"""Pydantic models for the ``/chat/query`` endpoint."""
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from models.content import Citation
 
 
 class ChatRequest(BaseModel):
-    """Request body for POST /chat/query.
-    
-    ``history`` is the current chat session message history as a list of
-    ``{"role": "user"|"assistant", "content": str}`` dicts.
+    """Question and backward-compatible prior display history.
+
+    Parameters
+    ----------
+    query:
+        Natural-language question.
+    history:
+        Existing display messages; not treated as retrieved evidence.
     """
-    
+
     query: str
-    history: list[dict] = []
+    history: list[dict] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
-    """Response body for POST /chat/query (200 OK).
-    
-    ``response`` is the LLM-generated answer text.
-    ``history`` is the updated message history with the user query and
-    assistant response appended.
-    ``retrieved_chunks`` is the number of document chunks retrieved for context.
+    """Grounded answer with additive structured source citations.
+
+    Parameters
+    ----------
+    response:
+        Generated answer text.
+    history:
+        Updated display history.
+    citations:
+        Exactly-used structured source locations; empty for legacy results.
     """
-    
+
     response: str
     history: list[dict]
     retrieved_chunks: int = 0
+    citations: list[Citation] = Field(default_factory=list)

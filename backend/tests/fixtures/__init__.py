@@ -1,0 +1,1 @@
+"""Deterministic structured-ingestion fixtures."""

@@ -16,6 +16,7 @@ if str(_frontend_root) not in sys.path:
     sys.path.insert(0, str(_frontend_root))
 
 import api_client  # noqa: E402
+from citation_format import unique_citation_labels  # noqa: E402
 
 st.title("💬 Chat with Your Documents")
 
@@ -58,6 +59,9 @@ for message in st.session_state["messages"]:
     content = message.get("content", "")
     with st.chat_message(role):
         st.markdown(content)
+        citation_labels = unique_citation_labels(message.get("citations") or [])
+        if role == "assistant" and citation_labels:
+            st.caption("Sources: " + " · ".join(citation_labels))
 
 # ---------------------------------------------------------------------------
 # Query input and submission
@@ -81,18 +85,27 @@ if query:
 
                 assistant_response: str = result.get("response", "")
                 retrieved_chunks: int = result.get("retrieved_chunks", 0)
+                citations: list[dict] = result.get("citations") or []
+                citation_labels = unique_citation_labels(citations)
 
-                # Display the assistant's reply
+                # Display the assistant's reply and additive legal sources.
                 st.markdown(assistant_response)
+                if citation_labels:
+                    st.caption("Sources: " + " · ".join(citation_labels))
                 st.caption(f"_Retrieved {retrieved_chunks} relevant chunks_")
 
-                # Append both messages to session state
+                # Append both messages to session state. Historical two-field
+                # messages and older backends without citations remain valid.
                 st.session_state["messages"].append(
                     {"role": "user", "content": query}
                 )
-                st.session_state["messages"].append(
-                    {"role": "assistant", "content": assistant_response}
-                )
+                assistant_message = {
+                    "role": "assistant",
+                    "content": assistant_response,
+                }
+                if citations:
+                    assistant_message["citations"] = citations
+                st.session_state["messages"].append(assistant_message)
 
             except Exception as exc:
                 error_msg = str(exc)

@@ -1,0 +1,24 @@
+[
+  {
+    "pdf_page": 98,
+    "width": 595,
+    "height": 842,
+    "blocks": [
+      {"block_type": "prose", "text": "Currency and Exchanges Manual for Authorised Dealers B.4", "bbox": [40, 44, 550, 55]},
+      {"block_type": "prose", "text": "B.4 Single discretionary allowance", "bbox": [40, 90, 500, 105]},
+      {"block_type": "prose", "text": "98 of 298 6/2026", "bbox": [230, 790, 550, 802]}
+    ]
+  },
+  {
+    "pdf_page": 99,
+    "width": 595,
+    "height": 842,
+    "blocks": [
+      {"block_type": "prose", "text": "Currency and Exchanges Manual for Authorised Dealers B.4", "bbox": [40, 44, 550, 55]},
+      {"block_type": "prose", "text": "Prose before table", "bbox": [40, 90, 500, 110]},
+      {"block_type": "table", "text": "| Code | Description |\n| --- | --- |\n| 511 01 | Example |", "bbox": [40, 200, 550, 300], "table_header": ["Code", "Description"], "table_rows": [["511 01", "Example"]]},
+      {"block_type": "prose", "text": "Prose after table", "bbox": [40, 350, 500, 370]},
+      {"block_type": "prose", "text": "99 of 298 8/2026", "bbox": [230, 790, 550, 802]}
+    ]
+  }
+]

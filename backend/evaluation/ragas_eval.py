@@ -44,11 +44,12 @@ from ragas.metrics.collections import (
 from config import settings
 from evaluation.ragas_adapters import OllamaRagasLLM, ProviderRagasEmbeddings
 from services.chat_service import ChatService
-from services.document_parser import parse_document
+from services.document_parser import parse_document_structured
 from services.embedding_provider import EmbeddingProvider, create_embedding_provider
+from services.legal_chunker import chunk_parsed_document
 from services.ollama_client import OllamaClient
-from services.text_chunker import chunk_text
-from services.text_cleaner import clean_text
+from services.retrieval_service import RetrievalService
+from services.text_cleaner import clean_parsed_document
 from services.vector_store import VectorStore
 
 logger = logging.getLogger(__name__)
@@ -183,17 +184,18 @@ async def missing_ollama_models(base_url: str, models: List[str]) -> List[str]:
 
 
 async def _ingest_corpus(vector_store: VectorStore, corpus: List[Path]) -> int:
-    """Run the same parse -> clean -> chunk -> embed path as DocumentService."""
+    """Run the same structured legal/generic route as ``DocumentService``."""
     total = 0
     for index, corpus_file in enumerate(corpus):
-        raw_text = parse_document(corpus_file.name, corpus_file.read_bytes())
-        chunks = chunk_text(clean_text(raw_text))
-        if not chunks:
+        parsed = parse_document_structured(corpus_file.name, corpus_file.read_bytes())
+        cleaned = clean_parsed_document(parsed)
+        records = chunk_parsed_document(cleaned, document_id=f"golden-{index}")
+        if not any(record.record_type == "child" for record in records):
             raise RuntimeError(f"No chunks produced from corpus file {corpus_file}")
         total += await vector_store.add_document(
             document_id=f"golden-{index}",
             filename=corpus_file.name,
-            chunks=chunks,
+            chunks=records,
         )
     return total
 
@@ -291,36 +293,34 @@ async def evaluate_pipeline(
         embedding_model=settings.ollama_embedding_model,
         num_gpu=settings.ollama_num_gpu,
         embedding_dimension=settings.embedding_dimension,
+        num_ctx=settings.ollama_num_ctx,
     )
     judge_client = OllamaClient(
         base_url=settings.ollama_base_url,
         model=judge_model_name(),
         num_gpu=settings.ollama_num_gpu,
+        num_ctx=settings.ollama_num_ctx,
     )
     provider = embedding_provider or create_embedding_provider(settings, chat_client)
     judge = OllamaRagasLLM(judge_client, max_tokens=settings.ragas_judge_max_tokens)
     metrics = _build_metrics(judge, ProviderRagasEmbeddings(provider))
 
     started = time.perf_counter()
-    # VectorStore reads the DB path from settings at initialize(); point it at
-    # the throwaway database only for the duration of this run.
-    original_db_path = settings.sqlite_db_path
-    settings.sqlite_db_path = str(db_path)
-    vector_store = VectorStore(embedding_provider=provider)
-    try:
-        await vector_store.initialize()
-    finally:
-        settings.sqlite_db_path = original_db_path
+    vector_store = VectorStore(embedding_provider=provider, db_path=db_path)
+    await vector_store.initialize()
 
     results: List[SampleResult] = []
     try:
         chunk_count = await _ingest_corpus(vector_store, dataset.corpus)
         logger.info("Ingested %d chunks from %d corpus file(s)", chunk_count, len(dataset.corpus))
 
+        retrieval_service = RetrievalService(vector_store, settings)
         chat_service = ChatService(
             vector_store=vector_store,
             ollama_client=chat_client,
             think=settings.ollama_think,
+            num_ctx=settings.ollama_num_ctx,
+            retrieval_service=retrieval_service,
         )
         for i, sample in enumerate(samples, start=1):
             t0 = time.perf_counter()

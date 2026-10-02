@@ -1,0 +1,32 @@
+{
+  "description": "Golden question/reference set for RAGAS evaluation of the Scatterbrain RAG pipeline. The corpus is fictional so answers must come from retrieved context, not model prior knowledge.",
+  "corpus": [
+    "corpus/harborlight_handbook.txt"
+  ],
+  "samples": [
+    {
+      "user_input": "How many days of paid annual leave do full-time employees get?",
+      "reference": "Full-time employees receive 28 days of paid annual leave per calendar year."
+    },
+    {
+      "user_input": "What temperature range must pharmaceutical storage zones be kept in?",
+      "reference": "Pharmaceutical storage zones must be kept between 2 and 8 degrees Celsius."
+    },
+    {
+      "user_input": "What must a shift supervisor do if a storage zone is out of range for more than 15 minutes?",
+      "reference": "The shift supervisor must move the affected stock to the backup cold room and file an incident report within 24 hours."
+    },
+    {
+      "user_input": "What is the daily meal allowance for business travel within the Baltic states?",
+      "reference": "The daily meal allowance within the Baltic states is 45 euros."
+    },
+    {
+      "user_input": "Where is Harborlight Logistics headquartered and when did it move there?",
+      "reference": "Harborlight Logistics has been headquartered in Riga, Latvia, since it moved there in 2019."
+    },
+    {
+      "user_input": "How often must forklift operators renew their certification?",
+      "reference": "Forklift operators must renew their certification every 3 years."
+    }
+  ]
+}

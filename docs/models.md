@@ -1,59 +1,41 @@
 # Models (`backend/models/`)
 
-Pydantic models for API I/O and internal data transfer. No ORM or database logic lives here.
+Pydantic API and internal transfer models only; no ORM/database behavior lives here.
+
+## `models/content.py`
+
+| Model | Purpose |
+| --- | --- |
+| `SourceSpan` | One-based PDF page, printed page, revision, bounding box, block order, optional character range |
+| `ExtractedBlock` | Ordered coordinate-aware prose/table block with raw/clean text and table rows/header |
+| `ExtractedPage` | Page provenance, body/front-matter/navigation classification, ordered blocks |
+| `ParsedDocument` | Source hash/title/version, extraction/parser/schema versions, pages and navigation map |
+| `ChunkRecord` | Parent/intermediate/navigation or searchable child with complete structured metadata |
+| `RetrievedContext` | Ranked source child, relationship, short governing context, metadata |
+| `Citation` | Additive API source/legal location and display label |
+| `ChatResult` | Typed answer, exactly-used contexts, citations; still unpacks as historical `(answer, source_texts)` |
+
+`ChunkRecord` keeps `raw_text`, `source_text`, and `embedding_text` separate. `record_type="child"` requires `child_id`; non-child records require `parent_id`. Fields include source SHA/version, page ranges/revisions, section/clause paths, breadcrumb, relationship IDs, table/code/term data, cross-references, extraction method, parser version, and source spans.
 
 ## `models/chat.py`
 
 ### `ChatRequest`
-Body of `POST /chat/query`. Used by `routers/chat.py`.
 
-| Field | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `query` | `str` | required | User question |
-| `history` | `list[dict]` | `[]` | Prior messages `{"role": "user" \| "assistant", "content": str}` |
+`query: str`; `history: list[dict] = []` (factory-backed). History remains display state and is not treated as retrieved evidence.
 
 ### `ChatResponse`
-Response of `POST /chat/query`.
 
-| Field | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `response` | `str` | required | LLM answer |
-| `history` | `list[dict]` | required | Input history plus this user/assistant turn |
-| `retrieved_chunks` | `int` | `0` | Number of chunks used as context (count, not text) |
+| Field | Type | Compatibility |
+| --- | --- | --- |
+| `response` | `str` | unchanged |
+| `history` | `list[dict]` | unchanged |
+| `retrieved_chunks` | `int` | unchanged count |
+| `citations` | `list[Citation]` | additive, defaults empty |
 
 ## `models/document.py`
 
-### `DocumentRecord`
-Internal tracking record. Created by `DocumentService.upload`, persisted and loaded by `DocumentDB`.
+`DocumentRecord` retains ID, filename, upload time, status, and error, and adds chunk count, source hash, detected title/version, extraction/parser/schema versions, and `needs_reingestion` for legacy flat rows.
 
-| Field | Type | Notes |
-| --- | --- | --- |
-| `document_id` | `str` | UUID4 |
-| `filename` | `str` | Original upload name |
-| `uploaded_at` | `datetime` | UTC |
-| `status` | `Literal["processing", "completed", "failed"]` | `processing` → `completed` \| `failed` |
-| `error` | `str \| None` | Failure reason |
+`UploadResponse.document_id` is unchanged. `DocumentListItem` exposes additive status/provenance fields.
 
-The `documents` table also stores `chunk_count`, but it isn't a field on this model, so it's not returned by the API.
-
-### `UploadResponse`
-Response of `POST /documents/upload` (202).
-
-| Field | Type |
-| --- | --- |
-| `document_id` | `str` |
-
-### `DocumentListItem`
-Element of `GET /documents` and response of `GET /documents/{id}`. Same fields as `DocumentRecord`, with `status` typed as plain `str`.
-
-### `SearchResultItem`
-Element of `GET /search`. Built in `routers/search.py` from `VectorStore.search` result dicts.
-
-| Field | Type | Source in search result |
-| --- | --- | --- |
-| `chunk_id` | `str` | `id` (`{document_id}_chunk_{i}`) |
-| `document_id` | `str` | `metadata.document_id` |
-| `filename` | `str` | `metadata.filename` |
-| `chunk_index` | `int` | `metadata.chunk_index` |
-| `text` | `str` | `text` |
-| `similarity` | `float` | `similarity` (`1 - cosine distance`) |
+`SearchResultItem` retains required legacy fields (`chunk_id`, `document_id`, `filename`, `chunk_index`, `text`, `similarity`) and adds score, child/parent IDs, source/version/page/revision/hierarchy fields, content relationships, table/code/term/cross-reference metadata, and governing/relation data. Old JSON still validates because every addition is optional/defaulted.

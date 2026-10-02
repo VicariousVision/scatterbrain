@@ -102,6 +102,12 @@ async def list_documents() -> List[DocumentListItem]:
             uploaded_at=r.uploaded_at,
             status=r.status,
             error=r.error,
+            chunk_count=r.chunk_count,
+            source_sha256=r.source_sha256,
+            document_title=r.document_title,
+            document_version=r.document_version,
+            parser_version=r.parser_version,
+            needs_reingestion=r.needs_reingestion,
         )
         for r in records
     ]
@@ -123,6 +129,12 @@ async def get_document(document_id: str) -> DocumentListItem:
         uploaded_at=record.uploaded_at,
         status=record.status,
         error=record.error,
+        chunk_count=record.chunk_count,
+        source_sha256=record.source_sha256,
+        document_title=record.document_title,
+        document_version=record.document_version,
+        parser_version=record.parser_version,
+        needs_reingestion=record.needs_reingestion,
     )
 
 
