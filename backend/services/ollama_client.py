@@ -27,6 +27,8 @@ import time
 
 import httpx
 
+from services.llm_errors import LLMClientError
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -104,7 +106,7 @@ def _connection_failure_hint(base_url: str, exc: Exception) -> str:
 # ---------------------------------------------------------------------------
 
 
-class OllamaClientError(Exception):
+class OllamaClientError(LLMClientError):
     """Raised when the Ollama client encounters an error communicating with the Ollama API."""
 
 

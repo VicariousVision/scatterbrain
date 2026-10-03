@@ -27,6 +27,7 @@ from services.chat_service import ChatService
 from services.document_db import DocumentDB
 from services.document_service import DocumentService
 from services.embedding_provider import EmbeddingProvider, create_embedding_provider
+from services.gemini_client import GeminiClient
 from services.ollama_client import OllamaClient
 from services.retrieval_service import RetrievalService
 from services.vector_store import VectorStore
@@ -36,6 +37,32 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def create_chat_client(app_settings, ollama_client: OllamaClient) -> tuple:
+    """Choose the chat LLM client for the configured provider.
+
+    Returns
+    -------
+    tuple
+        ``(client, num_ctx, think, prompt_style, model_name)``.
+    """
+    if app_settings.llm_provider == "gemini":
+        client = GeminiClient(
+            api_key=app_settings.gemini_api_key.get_secret_value(),
+            model=app_settings.gemini_model,
+            timeout=app_settings.gemini_timeout_seconds,
+            temperature=app_settings.gemini_temperature,
+            max_tokens=app_settings.gemini_max_output_tokens,
+        )
+        return client, app_settings.gemini_context_tokens, None, "gemini", app_settings.gemini_model
+    return (
+        ollama_client,
+        app_settings.ollama_num_ctx,
+        app_settings.ollama_think,
+        "ollama",
+        app_settings.ollama_model,
+    )
 
 
 @asynccontextmanager
@@ -103,12 +130,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     document_db.fail_stale_processing()
     document_service = DocumentService(vector_store=vector_store, document_db=document_db)
     retrieval_service = RetrievalService(vector_store=vector_store, app_settings=settings)
+    chat_client, chat_num_ctx, chat_think, prompt_style, llm_model = create_chat_client(
+        settings, ollama_client
+    )
+    logger.info("Chat answers provided by: %s (model %s)", settings.llm_provider, llm_model)
+    app.state.llm_provider = settings.llm_provider
+    app.state.llm_model = llm_model
     chat_service = ChatService(
         vector_store=vector_store,
-        ollama_client=ollama_client,
-        think=settings.ollama_think,
-        num_ctx=settings.ollama_num_ctx,
+        llm_client=chat_client,
+        think=chat_think,
+        num_ctx=chat_num_ctx,
         retrieval_service=retrieval_service,
+        prompt_style=prompt_style,
     )
     
     # ------------------------------------------------------------------

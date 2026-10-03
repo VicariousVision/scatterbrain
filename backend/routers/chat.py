@@ -7,7 +7,7 @@ Endpoints
 POST /chat/query
     Accept a ChatRequest, run the RAG pipeline, and return a ChatResponse.
     
-    Returns 503 Service Unavailable if Ollama is unreachable.
+    Returns 503 Service Unavailable if the chat LLM is unavailable.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from config import settings
 from models.chat import ChatRequest, ChatResponse
 from models.content import ChatResult
 from services.chat_service import ChatService
-from services.ollama_client import OllamaClientError
+from services.llm_errors import LLMClientError
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
     Retrieves relevant document chunks from the vector store and generates
     an answer using the LLM with grounded context.
     
-    Returns 503 if the Ollama LLM service is unavailable.
+    Returns 503 if the LLM service is unavailable.
     """
     svc = _require_chat_service()
     
@@ -76,11 +76,11 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
         else:  # Backward-compatible service doubles/older implementations.
             response_text, retrieved_chunks = result
             citations = []
-    except OllamaClientError as exc:
-        logger.error("Ollama unavailable during chat query: %s", exc)
+    except LLMClientError as exc:
+        logger.error("LLM unavailable during chat query: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="The LLM service (Ollama) is currently unavailable. Please try again later.",
+            detail="The LLM service is unavailable. Please try again later.",
         ) from exc
     except Exception as exc:
         logger.error("Chat query failed: %s", exc, exc_info=True)

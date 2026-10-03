@@ -114,3 +114,21 @@ def test_ollama_error_propagates() -> None:
 
     with pytest.raises(OllamaClientError):
         asyncio.run(service.query("q"))
+
+
+def test_gemini_error_propagates_and_llm_client_kwarg_works() -> None:
+    from services.gemini_client import GeminiClientError
+
+    vector_store = MagicMock()
+    vector_store.search = AsyncMock(return_value=[_result("t")])
+    client = MagicMock()
+    client.chat = AsyncMock(side_effect=GeminiClientError("quota"))
+    service = ChatService(vector_store=vector_store, llm_client=client, prompt_style="gemini")
+    with pytest.raises(GeminiClientError):
+        asyncio.run(service.query("q"))
+    assert "<document id=" in client.chat.await_args.args[0][1]["content"]
+
+
+def test_chat_service_requires_a_client() -> None:
+    with pytest.raises(TypeError):
+        ChatService(vector_store=MagicMock())

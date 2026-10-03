@@ -8,7 +8,8 @@ from typing import Any, Dict, List, Tuple
 
 from config import settings
 from models.content import ChatResult, Citation, RetrievedContext
-from services.ollama_client import OllamaClient, OllamaClientError
+from services import gemini_prompt
+from services.llm_errors import LLMClientError
 from services.retrieval_service import RetrievalService
 from services.vector_store import VectorStore
 
@@ -147,8 +148,10 @@ class ChatService:
     ----------
     vector_store:
         Persistence/search service retained for backward compatibility.
+    llm_client:
+        Async chat client (Ollama or Gemini) exposing ``chat(messages, think=)``.
     ollama_client:
-        Local async generation client.
+        Keyword alias for ``llm_client`` (backward compatibility).
     retrieval_service:
         Hybrid retrieval orchestrator. If omitted, legacy vector search is
         adapted automatically (useful for old callers and tests).
@@ -156,21 +159,35 @@ class ChatService:
         Ollama thinking option.
     num_ctx:
         Context window used for a conservative character budget.
+    prompt_style:
+        ``"ollama"`` (default) or ``"gemini"`` to select the prompt layout.
     """
 
     def __init__(
         self,
         vector_store: VectorStore,
-        ollama_client: OllamaClient,
+        llm_client: Any = None,
         think: bool | None = None,
         num_ctx: int = 8192,
         retrieval_service: RetrievalService | None = None,
+        *,
+        ollama_client: Any = None,
+        prompt_style: str = "ollama",
     ) -> None:
+        llm_client = llm_client or ollama_client
+        if llm_client is None:
+            raise TypeError("ChatService requires llm_client (or ollama_client)")
+        self._prompt_style = prompt_style
         self._vector_store = vector_store
-        self._ollama_client = ollama_client
+        self._llm_client = llm_client
         self._retrieval_service = retrieval_service
         self._think = think
         self._num_ctx = num_ctx
+
+    @property
+    def _ollama_client(self) -> Any:
+        """Backward-compatible alias for the chat client."""
+        return self._llm_client
 
     def _select_within_budget(
         self,
@@ -179,16 +196,21 @@ class ChatService:
     ) -> Tuple[List[Dict[str, Any]], List[str]]:
         """Keep the ranked prefix whose complete labeled blocks fit."""
         total_chars = self._num_ctx * _CHARS_PER_TOKEN
-        fixed_chars = len(_SYSTEM_PROMPT) + len(
-            _USER_TEMPLATE.format(context="", query=user_query)
-        )
+        gemini = self._prompt_style == "gemini"
+        format_block = gemini_prompt.format_gemini_document if gemini else _format_document
+        if gemini:
+            fixed_chars = gemini_prompt.fixed_chars(user_query)
+        else:
+            fixed_chars = len(_SYSTEM_PROMPT) + len(
+                _USER_TEMPLATE.format(context="", query=user_query)
+            )
         answer_chars = _ANSWER_RESERVE_TOKENS * _CHARS_PER_TOKEN
         budget = max(0, total_chars - fixed_chars - answer_chars)
         kept: list[dict[str, Any]] = []
         blocks: list[str] = []
         used = 0
         for result in results:
-            block = _format_document(len(kept) + 1, result)
+            block = format_block(len(kept) + 1, result)
             cost = len(block) + (2 if blocks else 0)
             if used + cost > budget:
                 break
@@ -225,20 +247,23 @@ class ChatService:
             results = [dict(result) for result in legacy]
 
         kept, blocks = self._select_within_budget(results, user_query)
-        messages = [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": _USER_TEMPLATE.format(
-                    context="\n\n".join(blocks) or _NO_CONTEXT,
-                    query=user_query,
-                ),
-            },
-        ]
+        if self._prompt_style == "gemini":
+            messages = gemini_prompt.build_gemini_messages(blocks, user_query)
+        else:
+            messages = [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": _USER_TEMPLATE.format(
+                        context="\n\n".join(blocks) or _NO_CONTEXT,
+                        query=user_query,
+                    ),
+                },
+            ]
         try:
-            answer = await self._ollama_client.chat(messages, think=self._think)
-        except OllamaClientError:
-            logger.exception("Ollama generation failed")
+            answer = await self._llm_client.chat(messages, think=self._think)
+        except LLMClientError:
+            logger.exception("LLM generation failed")
             raise
 
         contexts = [_result_to_context(result, rank) for rank, result in enumerate(kept, 1)]

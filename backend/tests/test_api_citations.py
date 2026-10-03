@@ -30,3 +30,18 @@ def test_chat_router_serializes_structured_citations() -> None:
     assert result.response == "R2 million"
     assert result.retrieved_chunks == 1
     assert result.citations[0].label == "B.4(A)(i), p. 98"
+
+
+def test_chat_router_maps_llm_error_to_generic_503() -> None:
+    import pytest
+    from fastapi import HTTPException
+
+    from services.gemini_client import GeminiClientError
+
+    service = MagicMock()
+    service.query = AsyncMock(side_effect=GeminiClientError("quota"))
+    chat.set_services(service)
+    with pytest.raises(HTTPException) as info:
+        asyncio.run(chat.chat_query(chat.ChatRequest(query="q")))
+    assert info.value.status_code == 503
+    assert "Ollama" not in info.value.detail

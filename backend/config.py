@@ -5,7 +5,7 @@ All settings are loaded from .env via pydantic-settings.
 
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # .env lives at the repo root (one level above this backend/ package), not
@@ -31,6 +31,19 @@ class Settings(BaseSettings):
     # Chain-of-thought for thinking-capable models (qwen3.x). On CPU a single
     # thinking answer can run for 25+ minutes; disabled answers take seconds.
     ollama_think: bool = False
+
+    # Chat LLM provider: "ollama" (local, default) or "gemini" (cloud).
+    # Gemini sends the question and retrieved document text to Google, so it
+    # also requires ALLOW_CLOUD_LLM=true. Embeddings are unaffected.
+    llm_provider: str = "ollama"
+    gemini_api_key: SecretStr = SecretStr("")
+    gemini_model: str = "gemini-3.5-flash-lite"
+    gemini_temperature: float = Field(default=0.1, ge=0, le=2)
+    gemini_max_output_tokens: int = Field(default=1024, gt=0)
+    gemini_timeout_seconds: float = Field(default=60.0, gt=0)
+    allow_cloud_llm: bool = False
+    # Moderate context budget (tokens) to stay inside free-tier TPM limits.
+    gemini_context_tokens: int = Field(default=16000, gt=0)
 
     # Embedding backend settings
     embedding_provider: str = "huggingface"
@@ -112,6 +125,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 "RETRIEVAL_CANDIDATE_POOL must be at least RETRIEVAL_TOP_K"
             )
+        self.llm_provider = self.llm_provider.strip().lower()
+        if self.llm_provider not in {"ollama", "gemini"}:
+            raise ValueError("LLM_PROVIDER must be 'ollama' or 'gemini'")
+        if self.llm_provider == "gemini":
+            if not self.gemini_api_key.get_secret_value().strip():
+                raise ValueError("LLM_PROVIDER=gemini requires GEMINI_API_KEY")
+            if not self.allow_cloud_llm:
+                raise ValueError(
+                    "LLM_PROVIDER=gemini requires ALLOW_CLOUD_LLM=true "
+                    "(retrieved document text is sent to Google)"
+                )
         return self
 
 
