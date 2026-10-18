@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     huggingface_embedding_batch_size: int = 32
     
     # SQLite + sqlite-vec settings
-    sqlite_db_path: str = "scatterbrain.db"
+    sqlite_db_path: str = "backend/scatterbrain.db"
     
     # Generic TXT/unrelated-PDF fallback only. Legal documents use the
     # clause-first settings below and never apply blind overlap to peer rules.
