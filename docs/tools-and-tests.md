@@ -20,8 +20,6 @@ No deterministic legal-ingestion test contacts Ollama. Temporary real SQLite/sql
 | `test_chat_service.py`, `test_api_citations.py` | context budget/security, typed results, legal labels, additive API compatibility |
 | `test_frontend_citations.py` | printed/PDF ranges, revisions, fallback and duplicate safety |
 | `test_document_service.py` | structured orchestration and failed replacement behavior |
-| `test_ragas_adapters.py` | local RAGAS adapters and fictional corpus |
-| `test_ragas_evaluation.py` | opt-in live local evaluation only |
 
 Syntax/import validation from repository root:
 
@@ -36,16 +34,9 @@ Implementation verification selects local PDF pages 47–49 and 98–99 with `pa
 
 The separate live-Ollama smoke step must use only `http://localhost:11434`, an explicit temporary `VectorStore(db_path=...)`, and pre/post fingerprints of the configured user DB. It should ask the documented `B.4(A)(i)` allowance/proof question and record citations; it is intentionally not part of the deterministic suite.
 
-## RAGAS (opt-in)
+## RAGAS scores (`ragas.ipynb`)
 
-```powershell
-cd backend
-pip install -r requirements-eval.txt
-$env:RUN_RAGAS_EVAL = "1"; .\.venv\Scripts\python.exe -m pytest -m ragas -s
-python -m evaluation.ragas_eval --output ragas_report.json
-```
-
-RAGAS reuses the structured production path and an explicit throwaway database. Its fictional TXT corpus still routes through generic `CHUNK_SIZE/CHUNK_OVERLAP`. Telemetry is disabled and all model calls target local Ollama.
+Install `backend/requirements-eval.txt` into `backend/.venv`, open the repo-root `ragas.ipynb` with that kernel, paste question/answer/context samples into cell 2, and Run All. The judge is Gemini (`GEMINI_API_KEY` in `.env`), so pasted text is sent to Google.
 
 ## `visualize_embeddings.py`
 

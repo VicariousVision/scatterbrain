@@ -11,7 +11,6 @@ The FastAPI backend ingests PDF/TXT documents into SQLite + sqlite-vec and answe
 | [models.md](models.md) | Pydantic API/internal transfer models |
 | [routers.md](routers.md) | HTTP endpoints and additive compatibility |
 | [services.md](services.md) | Ingestion, persistence, retrieval, and chat services |
-| [evaluation.md](evaluation.md) | Isolated RAGAS evaluation |
 | [tools-and-tests.md](tools-and-tests.md) | Utilities and deterministic test suites |
 
 ## Component map

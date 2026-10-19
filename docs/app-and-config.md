@@ -47,10 +47,6 @@
 
 Validation requires generic overlap < size, legal minimum ≤ target ≤ hard maximum, forced overlap below target/hard maximum, parent maximum ≥ child hard maximum, candidate pool ≥ final top-k, and positive limits.
 
-### RAGAS settings
-
-`ragas_judge_model` (empty → chat model), `ragas_judge_max_tokens=2048`, `ragas_max_samples=0`, and `ragas_min_faithfulness`, `ragas_min_answer_relevancy`, `ragas_min_context_precision`, `ragas_min_context_recall` (all `0.6`). See [evaluation.md](evaluation.md).
-
 `OLLAMA_MAX_PARALLEL` is read directly by `ollama_client.py` (default `1`).
 
 ## `main.py`
