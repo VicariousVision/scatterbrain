@@ -5,6 +5,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from models.content import Citation
+from models.evaluation import EvaluationData
 
 
 class ChatRequest(BaseModel):
@@ -33,9 +34,12 @@ class ChatResponse(BaseModel):
         Updated display history.
     citations:
         Exactly-used structured source locations; empty for legacy results.
+    evaluation:
+        Optional per-chunk similarity data (``INCLUDE_EVAL_DATA``).
     """
 
     response: str
     history: list[dict]
     retrieved_chunks: int = 0
     citations: list[Citation] = Field(default_factory=list)
+    evaluation: EvaluationData | None = None

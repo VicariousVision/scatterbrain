@@ -11,6 +11,8 @@ from typing import Any, Iterator, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from models.evaluation import EvaluationData
+
 PARSER_VERSION = "legal-structured-v1"
 SCHEMA_VERSION = 2
 
@@ -272,6 +274,8 @@ class Citation(BaseModel):
         Structured legal location when available.
     label:
         Preformatted compact display label.
+    markers:
+        Every ``[n]`` context marker that deduplicated into this citation.
     """
 
     document_id: str | None = None
@@ -286,6 +290,7 @@ class Citation(BaseModel):
     pdf_page_end: int | None = None
     page_revisions: list[str] = Field(default_factory=list)
     label: str = ""
+    markers: list[int] = Field(default_factory=list)
 
 
 class RetrievedContext(BaseModel):
@@ -333,6 +338,7 @@ class ChatResult(BaseModel):
     answer: str
     contexts: list[RetrievedContext] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
+    evaluation: EvaluationData | None = None
 
     @property
     def source_texts(self) -> list[str]:

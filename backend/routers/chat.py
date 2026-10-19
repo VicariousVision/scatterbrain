@@ -73,9 +73,11 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
             response_text = result.answer
             retrieved_chunks = result.source_texts
             citations = result.citations
+            evaluation = result.evaluation
         else:  # Backward-compatible service doubles/older implementations.
             response_text, retrieved_chunks = result
             citations = []
+            evaluation = None
     except LLMClientError as exc:
         logger.error("LLM unavailable during chat query: %s", exc)
         raise HTTPException(
@@ -100,4 +102,5 @@ async def chat_query(request: ChatRequest) -> ChatResponse:
         history=updated_history,
         retrieved_chunks=len(retrieved_chunks),
         citations=citations,
+        evaluation=evaluation,
     )

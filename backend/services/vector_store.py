@@ -804,6 +804,19 @@ class VectorStore:
                 f"{expected} for {self._embedding_provider.model_name!r}."
             )
 
+    @property
+    def embedding_model_name(self) -> str:
+        """Return ``provider/model`` for the active embedding provider."""
+        provider = self._embedding_provider
+        return f"{provider.provider_name}/{provider.model_name}"
+
+    async def embed_documents(self, texts: Sequence[str]) -> List[List[float]]:
+        """Embed texts on the document side (no query prefix)."""
+        embeddings = await self._embed_texts(texts)
+        for embedding in embeddings:
+            self._validate_embedding(embedding)
+        return embeddings
+
     async def _embed_text(self, text: str) -> List[float]:
         query_generator = getattr(
             self._embedding_provider, "generate_query_embedding", None

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import Any, Dict, List, Tuple
 
 from config import settings
 from models.content import ChatResult, Citation, RetrievedContext
+from models.evaluation import EvaluationData, EvaluationItem
 from services import gemini_prompt
 from services.llm_errors import LLMClientError
 from services.retrieval_service import RetrievalService
@@ -268,7 +270,92 @@ class ChatService:
 
         contexts = [_result_to_context(result, rank) for rank, result in enumerate(kept, 1)]
         citations = _citations(kept)
-        return ChatResult(answer=answer, contexts=contexts, citations=citations)
+        evaluation = await self._build_evaluation(answer, contexts)
+        return ChatResult(
+            answer=answer,
+            contexts=contexts,
+            citations=citations,
+            evaluation=evaluation,
+        )
+
+    async def _build_evaluation(
+        self, answer: str, contexts: list[RetrievedContext]
+    ) -> EvaluationData | None:
+        """Build per-chunk evaluation data; never raises.
+
+        ``similarity`` reuses the cosine already computed by vector search.
+        ``answer_similarity`` embeds the answer plus all chunk texts in one
+        document-side batch and compares them locally.
+        """
+        if not settings.include_eval_data:
+            return None
+        try:
+            cited = extract_cited_markers(answer, len(contexts))
+            answer_sims: list[float | None] = [None] * len(contexts)
+            model_name = "unknown"
+            try:
+                name = getattr(self._vector_store, "embedding_model_name", None)
+                if isinstance(name, str):
+                    model_name = name
+                embed = getattr(self._vector_store, "embed_documents", None)
+                if contexts and callable(embed):
+                    texts = [c.embedding_text or c.source_text for c in contexts]
+                    vectors = await embed([answer, *texts])
+                    if len(vectors) == len(contexts) + 1:
+                        answer_sims = [
+                            cosine_similarity(vectors[0], vec) for vec in vectors[1:]
+                        ]
+            except Exception as exc:  # evaluation must never fail the chat
+                logger.warning("Answer similarity unavailable: %s", exc)
+            items = []
+            for ctx, answer_sim in zip(contexts, answer_sims):
+                meta = ctx.metadata
+                items.append(
+                    EvaluationItem(
+                        marker=ctx.rank,
+                        rank=ctx.rank,
+                        child_id=ctx.child_id,
+                        parent_id=meta.get("parent_id"),
+                        relation=ctx.relation,
+                        similarity=ctx.similarity,
+                        cited=ctx.rank in cited,
+                        filename=str(meta.get("filename") or "unknown"),
+                        section_id=meta.get("section_id"),
+                        clause_path=meta.get("clause_path"),
+                        heading=meta.get("heading"),
+                        label=format_citation_label(meta),
+                        chunk_text=ctx.source_text,
+                        answer_similarity=answer_sim,
+                    )
+                )
+            return EvaluationData(query_embedding_model=model_name, retrieved=items)
+        except Exception as exc:
+            logger.warning("Evaluation data unavailable: %s", exc)
+            return None
+
+
+def cosine_similarity(a: Any, b: Any) -> float:
+    """Cosine similarity of two vectors; 0.0 if either has zero norm."""
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+_MARKER_RE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+
+
+def extract_cited_markers(answer: str, max_marker: int) -> set[int]:
+    """Return ``[n]`` markers (1..max_marker) that appear in the answer."""
+    found: set[int] = set()
+    for match in _MARKER_RE.finditer(answer or ""):
+        for number in match.group(1).split(","):
+            value = int(number)
+            if 1 <= value <= max_marker:
+                found.add(value)
+    return found
 
 
 def _context_to_result(context: RetrievedContext) -> dict[str, Any]:
@@ -303,8 +390,8 @@ def _result_to_context(result: dict[str, Any], rank: int) -> RetrievedContext:
 
 def _citations(results: list[dict[str, Any]]) -> list[Citation]:
     citations: list[Citation] = []
-    seen: set[tuple[Any, ...]] = set()
-    for result in results:
+    seen: dict[tuple[Any, ...], Citation] = {}
+    for marker, result in enumerate(results, 1):
         metadata = result.get("metadata") or {}
         legal_location = metadata.get("clause_path") or metadata.get("section_id")
         key = (
@@ -317,8 +404,8 @@ def _citations(results: list[dict[str, Any]]) -> list[Citation]:
             None if legal_location else result.get("id"),
         )
         if key in seen:
+            seen[key].markers.append(marker)
             continue
-        seen.add(key)
         citations.append(
             Citation(
                 document_id=metadata.get("document_id"),
@@ -333,6 +420,8 @@ def _citations(results: list[dict[str, Any]]) -> list[Citation]:
                 pdf_page_end=metadata.get("pdf_page_end"),
                 page_revisions=list(metadata.get("page_revisions") or []),
                 label=format_citation_label(metadata),
+                markers=[marker],
             )
         )
+        seen[key] = citations[-1]
     return citations

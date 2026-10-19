@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # section/parent diversification down to the final context count.
     retrieval_candidate_pool: int = Field(default=10, gt=0)
     retrieval_top_k: int = Field(default=5, gt=0)
+    # Adds per-chunk similarity data to chat responses (one extra embedding
+    # batch per chat request).
+    include_eval_data: bool = True
     retrieval_max_children_per_parent: int = Field(default=2, gt=0)
     retrieval_max_children_per_section: int = Field(default=3, gt=0)
     
