@@ -1,0 +1,24 @@
+{"id": "T1-01", "type": 1, "user_input": "What is the maximum amount in Rand notes that a resident may export when leaving South Africa?", 
+"reference": "R100 000 in notes when leaving South Africa. This allowance is in addition to the normal travel allowance.", 
+"reference_contexts": ["(i) Residents including foreign nationals, non-residents and visitors are\npermitted to export up to R100 000 in notes when leaving South Africa.\nThis allowance for residents and foreign nationals is in addition to the\nnormal travel allowance."], "source_sections": "B.11(B)(i)", 
+"response": "Residents leaving South Africa are permitted to export up to R100 000 in notes. This allowance is in addition to the normal travel allowance.\n\nSources: [1]",
+ "retrieved_contexts": ["           
+         (i) Residents including foreign nationals, non-residents and visitors are\n          
+                         permitted to export up to R100 000 in notes when leaving South Africa.\n     
+           This allowance for residents and foreign nationals is in addition to the\n   
+              normal travel allowance.", "             
+                    (iii) Authorised Dealers should also take note of the provisions of\n
+     section F.1(B) of the Authorised Dealer Manual regarding the export and\n 
+                   repatriation of Rand notes.", "       
+                               (ii) As an exception Authorised Dealers may allow the exportation of Rand\n    
+                                                     notes and foreign bank notes subject to the conditions set out hereunder.", "     
+                                                                     (v) In addition, household and personal effects up to an amount of R2 million\n    
+                                                                                           per family unit may be exported under a SARS Customs Declaration form\n    
+             within the same calendar year that the individual ceases to be a resident\n          
+                             for tax purposes provided such assets have been declared on the\n        
+                                               relevant forms. Transactions of this nature will be treated similar to cash.\n      
+                                                                   For amounts in excess of R2 million, the provisions of (vi) and (vii) below\n      
+                                                                                       will apply.", "             
+        (ii) Resident exporters receiving payment in this manner must, however,\n              
+                    declare and offer for sale such foreign currency to an Authorised Dealer\n    
+                                          not later than the following business day after acquisition thereof."]}
