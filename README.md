@@ -20,36 +20,54 @@ Legal/manual PDFs use clause-first parent/child chunking; ordinary TXT and unrel
 
 ## Prerequisites
 
-1. Python 3.11+
+1. Python 3.11 or 3.12. Python 3.13 is not supported yet: the frontend pins `streamlit==1.35.0`, which requires `numpy<2`, and numpy 1.x has no Python 3.13 wheels.
 2. Ollama, installed from [ollama.com](https://ollama.com/)
 
-Ollama is used for answer generation with the default configuration. Pull the generation model and start the server:
+Ollama is used for answer generation with the default configuration. Start the server (the Ollama desktop app on Windows and macOS already runs it in the background), then pull the generation model:
 
 ```powershell
-ollama pull qwen3.5:0.8b
 ollama serve
+# in another terminal
+ollama pull qwen3.5:0.8b
 ```
 
 ## Setup
 
-Copy the environment template:
+Copy the environment template from the repository root:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Install backend and frontend dependencies:
+The backend and frontend **must use separate virtual environments**. Their pinned dependencies conflict: installing the frontend requirements into the backend environment downgrades `numpy` (breaking `scipy`/`sentence-transformers`, so the backend fails on startup) and `httpx` (which `google-genai` needs).
+
+Backend environment:
 
 ```powershell
 cd backend
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-cd ..\frontend
-pip install -r requirements.txt
+deactivate
 ```
+
+Frontend environment:
+
+```powershell
+cd ..\frontend
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+deactivate
+```
+
+On macOS/Linux, use `python3.12 -m venv .venv` and `source .venv/bin/activate` instead.
 
 ### Embedding provider configuration
 
-The environment template and backend fallback default to Hugging Face embeddings. To use Ollama embeddings instead:
+The environment template and backend fallback default to Hugging Face embeddings (`litillabs/litil-embed-0.6b`). On the first backend start, Sentence Transformers downloads this model from Hugging Face, so the first start needs internet access and takes noticeably longer. Later starts use the local Hugging Face cache.
+
+To use Ollama embeddings instead:
 
 ```dotenv
 EMBEDDING_PROVIDER=ollama
@@ -80,10 +98,13 @@ The vector table has a fixed dimension and vectors from different models cannot 
 
 ## Run the application
 
+Make sure Ollama is running first.
+
 Backend:
 
 ```powershell
 cd backend
+.\.venv\Scripts\Activate.ps1
 uvicorn main:app --reload
 ```
 
@@ -91,6 +112,7 @@ Frontend, in another terminal:
 
 ```powershell
 cd frontend
+.\.venv\Scripts\Activate.ps1
 streamlit run app.py
 ```
 
@@ -179,9 +201,15 @@ scatterbrain/
 
 ## Development
 
-Run backend tests:
+The test tools (`pytest`, `hypothesis`) and the RAGAS notebook dependencies are in `backend/requirements-eval.txt`, which also includes the app requirements. Install them into the backend environment, then run the tests:
 
 ```powershell
 cd backend
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements-eval.txt
 pytest
 ```
+
+The RAGAS notebook (`ragas.ipynb`) uses the `backend/.venv` kernel and needs `GEMINI_API_KEY` in `.env` for its Gemini judge.
+
+`backend/tools/authorised_dealers_smoke.py` needs the *Currency and Exchanges Manual for Authorised Dealers* PDF, which is not in the repository; supply your own copy with `--pdf`.
