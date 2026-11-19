@@ -153,7 +153,7 @@ A separate live-Ollama step can run the isolated API smoke harness (it fingerpri
 cd backend
 $env:EMBEDDING_PROVIDER='ollama'
 $env:OLLAMA_BASE_URL='http://localhost:11434'
-$env:OLLAMA_MODEL='qwen3.5:0.8b'
+$env:OLLAMA_MODEL='gemma4:e4b-mlx'
 $env:OLLAMA_EMBEDDING_MODEL='nomic-embed-text'
 $env:EMBEDDING_DIMENSION='768'
 $env:OLLAMA_NUM_GPU='0'

@@ -9,7 +9,7 @@
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `ollama_base_url` | `http://localhost:11434` | Local Ollama URL |
-| `ollama_model` | `qwen3.5:0.8b` | Generation model |
+| `ollama_model` | `gemma4:e4b-mlx` | Generation model |
 | `ollama_embedding_model` | `nomic-embed-text` | Ollama embedding model |
 | `ollama_num_gpu` | `0` | GPU layers (`0` = CPU) |
 | `ollama_num_ctx` | `8192` | Ollama context and RAG budget basis |

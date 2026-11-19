@@ -28,7 +28,7 @@ Ollama is used for answer generation with the default configuration. Start the s
 ```powershell
 ollama serve
 # in another terminal
-ollama pull qwen3.5:0.8b
+ollama pull gemma4:e4b-mlx
 ```
 
 ## Setup
@@ -170,7 +170,7 @@ scatterbrain/
 |---|---|---|
 | `EMBEDDING_PROVIDER` | `huggingface` | `ollama` or `huggingface` |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `OLLAMA_MODEL` | `qwen3.5:0.8b` | LLM used for answer generation |
+| `OLLAMA_MODEL` | `gemma4:e4b-mlx` | LLM used for answer generation |
 | `OLLAMA_EMBEDDING_MODEL` | `nomic-embed-text` | Ollama embedding model |
 | `EMBEDDING_DIMENSION` | `768` | Ollama vector dimension |
 | `HUGGINGFACE_EMBEDDING_MODEL` | `litillabs/litil-embed-0.6b` | Hugging Face model ID/path |

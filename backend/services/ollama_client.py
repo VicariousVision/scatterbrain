@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # Override via OLLAMA_MAX_PARALLEL env var.  Recommended values:
 #   1  — safe default for any hardware; fully sequential
 #   2  — good for small models (≤3B) on CPU with ≥16 GB RAM
-#   4  — suitable for qwen3.5:0.8b or similar tiny models on ≥24 GB RAM
+#   4  — suitable for tiny (≤1B) models on ≥24 GB RAM
 #
 # Also set OLLAMA_NUM_PARALLEL to the same value in your Ollama server
 # environment so Ollama accepts concurrent requests without queuing them
@@ -273,7 +273,7 @@ class OllamaClient:
             max_tokens: If set, passed as ``num_predict`` in the options dict
                         to cap output length.
             think:      If ``False``, disables chain-of-thought reasoning for
-                        qwen3 / thinking-capable models, so the <think> block
+                        thinking-capable models (e.g. gemma4), so the <think> block
                         cannot consume the token budget before the answer.
                         Ignored (not sent) when ``None``.
             temperature: Sampling temperature; ``None`` keeps the model default.

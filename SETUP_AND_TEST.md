@@ -19,7 +19,7 @@ Start Ollama and pull the generation and embedding models:
 
 ```powershell
 ollama serve
-ollama pull qwen3.5:0.8b
+ollama pull gemma4:e4b-mlx
 ollama pull nomic-embed-text
 ```
 

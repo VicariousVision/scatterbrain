@@ -37,7 +37,7 @@ QUESTION = (
     "allowance for residents aged 18 or older, and what is required for "
     "current transfers above that amount?"
 )
-EXPECTED_CHAT_MODEL = "qwen3.5:0.8b"
+EXPECTED_CHAT_MODEL = "gemma4:e4b-mlx"
 EXPECTED_EMBEDDING_MODEL = "nomic-embed-text"
 
 

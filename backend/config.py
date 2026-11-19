@@ -22,13 +22,13 @@ class Settings(BaseSettings):
     
     # Ollama LLM settings
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "qwen3.5:0.8b"
+    ollama_model: str = "gemma4:e4b-mlx"
     ollama_embedding_model: str = "nomic-embed-text"
     ollama_num_gpu: int = 0
     # Context window in tokens, sent to Ollama as options.num_ctx. Also sizes
     # the character budget for retrieved context in ChatService.
     ollama_num_ctx: int = 8192
-    # Chain-of-thought for thinking-capable models (qwen3.x). On CPU a single
+    # Chain-of-thought for thinking-capable models (e.g. gemma4). On CPU a single
     # thinking answer can run for 25+ minutes; disabled answers take seconds.
     ollama_think: bool = False
 
@@ -46,12 +46,12 @@ class Settings(BaseSettings):
     gemini_context_tokens: int = Field(default=16000, gt=0)
 
     # Embedding backend settings
-    embedding_provider: str = "huggingface"
+    embedding_provider: str = "ollama"
     embedding_dimension: int = 768
-    huggingface_embedding_model: str = "litillabs/litil-embed-0.6b"
+    huggingface_embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     huggingface_device: str = "cpu"
     huggingface_normalize_embeddings: bool = True
-    huggingface_query_prefix: str = "Instruct: Retrieve text based on user query.\nQuery: "
+    huggingface_query_prefix: str = ""
     huggingface_embedding_batch_size: int = 32
     
     # SQLite + sqlite-vec settings

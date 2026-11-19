@@ -54,7 +54,7 @@ with col2:
         "- PDF (`.pdf`)\n"
         "- Plain text (`.txt`)\n\n"
         "**Tech stack**\n\n"
-        "- Ollama (qwen3.5:0.8b + nomic-embed-text)\n"
+        "- Ollama (gemma4:e4b-mlx + nomic-embed-text)\n"
         "- SQLite + sqlite-vec (vector store)\n"
         "- Custom text chunking"
     )
